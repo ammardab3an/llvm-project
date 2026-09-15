@@ -197,3 +197,18 @@ func.func @operand_result() {
   return
 }
 }
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/217795
+// Unsigned integer memory-space attrs must map without asserting.
+// VULKAN-LABEL: func @unsigned_memory_space
+// OPENCL-LABEL: func @unsigned_memory_space
+// CHECK-LABEL: func @unsigned_memory_space
+func.func @unsigned_memory_space() {
+  // VULKAN: memref<10xf32, #spirv.storage_class<Generic>>
+  // OPENCL: memref<10xf32, #spirv.storage_class<Generic>>
+  // CHECK: memref<10xf32, #spirv.storage_class<Generic>>
+  %alloc = memref.alloc() : memref<10xf32, 1 : ui64>
+  return
+}

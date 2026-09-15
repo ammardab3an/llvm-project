@@ -73,7 +73,10 @@ spirv::mapMemorySpaceToVulkanStorageClass(Attribute memorySpaceAttr) {
   auto intAttr = dyn_cast<IntegerAttr>(memorySpaceAttr);
   if (!intAttr)
     return std::nullopt;
-  unsigned memorySpace = intAttr.getInt();
+  // Memory spaces may be encoded as signed, unsigned, or signless integers
+  // (e.g. `1 : ui64`). Use the APInt value rather than getInt(), which asserts
+  // on non-signless integer types. Regression: llvm/llvm-project#217795
+  unsigned memorySpace = intAttr.getValue().getZExtValue();
 
 #define STORAGE_SPACE_MAP_FN(storage, space)                                   \
   case space:                                                                  \
@@ -127,7 +130,8 @@ spirv::mapMemorySpaceToOpenCLStorageClass(Attribute memorySpaceAttr) {
   auto intAttr = dyn_cast<IntegerAttr>(memorySpaceAttr);
   if (!intAttr)
     return std::nullopt;
-  unsigned memorySpace = intAttr.getInt();
+  // See mapMemorySpaceToVulkanStorageClass: accept non-signless integer attrs.
+  unsigned memorySpace = intAttr.getValue().getZExtValue();
 
 #define STORAGE_SPACE_MAP_FN(storage, space)                                   \
   case space:                                                                  \
