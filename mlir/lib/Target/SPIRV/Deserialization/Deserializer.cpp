@@ -2843,10 +2843,13 @@ LogicalResult ControlFlowStructurizer::structurize() {
         if (Block *mappedTo = mapper.lookupOrNull(newMerge))
           newMerge = mappedTo;
 
-        // The iterator should be erased before adding a new entry into
-        // blockMergeInfo to avoid iterator invalidation.
+        // Capture fields before erase: MapVector::erase invalidates `it`, and
+        // the following entry may move into the erased slot — reading
+        // it->second.control afterwards can steal another loop's control.
+        // Regression: llvm/llvm-project#218853
+        uint32_t control = it->second.control;
         blockMergeInfo.erase(it);
-        blockMergeInfo.try_emplace(newHeader, loc, it->second.control, newMerge,
+        blockMergeInfo.try_emplace(newHeader, loc, control, newMerge,
                                    newContinue);
       }
 
