@@ -4823,9 +4823,15 @@ convertOmpWsloop(Operation &opInst, llvm::IRBuilderBase &builder,
 
   // Emit finalization and in-place rewrites for linear vars.
   if (!wsloopOp.getLinearVars().empty()) {
+    // On some targets (e.g. GPU device codegen) CanonicalLoopInfo does not
+    // populate `lastiter`. Do not assert — emit a translation error instead.
+    // Regression: llvm/llvm-project#213905
+    if (!loopInfo->getLastIter())
+      return wsloopOp.emitOpError()
+             << "linear clause requires a last-iteration flag, which is not "
+                "available for this workshare loop lowering";
+
     llvm::OpenMPIRBuilder::InsertPointTy oldIP = builder.saveIP();
-    assert(loopInfo->getLastIter() &&
-           "`lastiter` in CanonicalLoopInfo is nullptr");
     llvm::OpenMPIRBuilder::InsertPointOrErrorTy afterBarrierIP =
         linearClauseProcessor.finalizeLinearVar(builder, moduleTranslation,
                                                 loopInfo->getLastIter());

@@ -3542,9 +3542,13 @@ LogicalResult WsloopOp::verify() {
   if (failed(
           verifyLinearModifiers(*this, getLinearModifiers(), getLinearVars())))
     return failure();
-  if (getLinearVars().size() &&
-      getLinearVarTypes().value().size() != getLinearVars().size())
-    return emitError() << "Ill-formed type attributes for linear variables";
+  // Do not call Optional::value() when the attribute is missing — that asserts.
+  // Emit a verifier error instead. Regression: llvm/llvm-project#213905
+  if (!getLinearVars().empty()) {
+    std::optional<ArrayAttr> linearVarTypes = getLinearVarTypes();
+    if (!linearVarTypes || linearVarTypes->size() != getLinearVars().size())
+      return emitError() << "Ill-formed type attributes for linear variables";
+  }
 
   if (failed(verifyPrivateVarList(*this)))
     return failure();
@@ -3646,9 +3650,11 @@ LogicalResult SimdOp::verify() {
   if (failed(verifyPrivateVarList(*this)))
     return failure();
 
-  if (getLinearVars().size() &&
-      getLinearVarTypes().value().size() != getLinearVars().size())
-    return emitError() << "Ill-formed type attributes for linear variables";
+  if (!getLinearVars().empty()) {
+    std::optional<ArrayAttr> linearVarTypes = getLinearVarTypes();
+    if (!linearVarTypes || linearVarTypes->size() != getLinearVars().size())
+      return emitError() << "Ill-formed type attributes for linear variables";
+  }
 
   llvm::DenseSet<Value> privateVars(llvm::from_range, getPrivateVars());
   llvm::DenseSet<Value> reductionVars(llvm::from_range, getReductionVars());
