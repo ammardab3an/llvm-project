@@ -416,3 +416,26 @@ func.func @destination_passing_style(
 // CANONICALIZECHECK-NEXT:     %[[S2:.+]] = arith.mulf %[[ARG4]], %[[ARG6]]
 // CANONICALIZECHECK-NEXT:     linalg.yield %[[ARG5]], %[[S2]]
 //      CANONICALIZECHECK:   return %[[GENERIC1]], %[[GENERIC2]]#1
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/220523
+// Zero-result first ops must not trigger the peel assert.
+// CHECK-LABEL: func @skip_zero_result_first_op
+func.func @skip_zero_result_first_op(%t: tensor<4xi1>) -> tensor<4xi1> {
+  %c = arith.constant true
+  // CHECK: linalg.generic
+  // CHECK: bufferization.dealloc_tensor
+  // CHECK-NOT: linalg.generic
+  %0 = linalg.generic {
+      indexing_maps = [affine_map<(d0) -> (d0)>, affine_map<(d0) -> (d0)>],
+      iterator_types = ["parallel"]}
+      ins(%t : tensor<4xi1>) outs(%t : tensor<4xi1>) {
+    ^bb0(%in: i1, %out: i1):
+      bufferization.dealloc_tensor %t : tensor<4xi1>
+      %x = arith.andi %in, %c : i1
+      %y = arith.ori %x, %out : i1
+      linalg.yield %y : i1
+  } -> tensor<4xi1>
+  return %0 : tensor<4xi1>
+}

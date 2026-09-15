@@ -266,12 +266,20 @@ DecomposeLinalgOp::matchAndRewrite(GenericOp genericOp,
                                        "operation has less than 3 statements");
   }
 
-  /// Check that the peeled statement has a scalar element type.
-  if (llvm::any_of(body->getOperations().begin()->getResultTypes(),
+  /// Check that the peeled statement produces scalar results. Zero-result
+  /// ops (e.g. `bufferization.dealloc_tensor`, `vector.scatter`) are not
+  /// peelable: `replaceOpUsesWithinBlock` reports allUsesReplaced vacuously
+  /// when there are no results, and the pattern expects the peeled op to
+  /// remain. Regression: llvm/llvm-project#220523
+  Operation &firstOp = body->front();
+  if (firstOp.getNumResults() == 0) {
+    return rewriter.notifyMatchFailure(
+        &firstOp, "expected peeled operation to produce at least one result");
+  }
+  if (llvm::any_of(firstOp.getResultTypes(),
                    [](Type t) { return !t.isIntOrIndexOrFloat(); })) {
     return rewriter.notifyMatchFailure(
-        &(*body->getOperations().begin()),
-        "expected return type to be only int, index or float");
+        &firstOp, "expected return type to be only int, index or float");
   }
 
   GenericOp peeledGenericOp = createPeeledGenericOp(genericOp, rewriter);
