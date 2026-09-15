@@ -66,9 +66,37 @@ struct TestOneShotModuleBufferizePass
   }
 
   void runOnOperation() override {
+    Operation *op = getOperation();
+    llvm::errs() << "Running TestOneShotModuleBufferize on: " << op->getName()
+                 << "\n";
 
-    llvm::errs() << "Running TestOneShotModuleBufferize on: "
-                 << getOperation()->getName() << "\n";
+    // Bail out gracefully when a function signature contains a tensor whose
+    // element type is not a valid memref element type (e.g. an LLVM array
+    // type). Such a type cannot be turned into a memref; without this check
+    // the bufferization would assert inside `MemRefType::get` while computing
+    // the bufferized function signature.
+    bool hadUnsupportedElementType = false;
+    op->walk([&](func::FuncOp funcOp) {
+      auto check = [&](Type type) {
+        if (auto tensorType = dyn_cast<TensorType>(type))
+          if (!BaseMemRefType::isValidElementType(tensorType.getElementType())) {
+            funcOp.emitOpError()
+                << "cannot bufferize tensor with element type "
+                << tensorType.getElementType()
+                << ": not a valid memref element type";
+            hadUnsupportedElementType = true;
+          }
+      };
+      for (Type t : funcOp.getFunctionType().getInputs())
+        check(t);
+      for (Type t : funcOp.getFunctionType().getResults())
+        check(t);
+    });
+    if (hadUnsupportedElementType) {
+      signalPassFailure();
+      return;
+    }
+
     bufferization::OneShotBufferizationOptions opt;
 
     opt.bufferizeFunctionBoundaries = true;
@@ -137,7 +165,7 @@ struct TestOneShotModuleBufferizePass
 
     bufferization::BufferizationState bufferizationState;
 
-    if (failed(bufferization::runOneShotModuleBufferize(getOperation(), opt,
+    if (failed(bufferization::runOneShotModuleBufferize(op, opt,
                                                         bufferizationState)))
       signalPassFailure();
   }
