@@ -1609,6 +1609,12 @@ LogicalResult mlir::affine::coalesceLoops(MutableArrayRef<AffineForOp> loops) {
     if (loop.getStepAsInt() != 1 || !loop.hasConstantLowerBound() ||
         loop.getConstantLowerBound() != 0)
       return failure();
+    // Coalescing remaps IVs and splices the innermost body while erasing
+    // intermediate nests. Loops with iter_args are unsupported: their block
+    // arguments would remain live across the erase.
+    // Regression: llvm/llvm-project#216455
+    if (loop.getNumRegionIterArgs() != 0)
+      return failure();
   }
   SmallVector<Value, 4> upperBoundSymbols;
   SmallVector<Value, 4> ubOperands(ub.getOperands().begin(),
@@ -2799,6 +2805,16 @@ LogicalResult affine::coalescePerfectlyNestedAffineLoops(AffineForOp op) {
       assert(maxPos == start &&
              "expected loop bounds to be known at the start of the band");
       auto band = llvm::MutableArrayRef(loops.data() + start, end - start);
+      // Loops with iter_args cannot participate in coalescing; truncate the
+      // band before the first such loop.
+      for (unsigned i = 0, e = band.size(); i < e; ++i) {
+        if (band[i].getNumRegionIterArgs() != 0) {
+          band = band.take_front(i);
+          break;
+        }
+      }
+      if (band.size() < 2)
+        continue;
       if (succeeded(coalesceLoops(band)))
         result = success();
       break;

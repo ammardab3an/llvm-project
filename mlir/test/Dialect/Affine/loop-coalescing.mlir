@@ -423,6 +423,14 @@ func.func @test_loops_do_not_get_coalesced() {
 // CHECK-SAME:    %[[ALLOC:.*]]: memref<?xi64>)
 func.func @inner_loop_has_iter_args(%alloc : memref<?xi64>) {
   %c17 = arith.constant 17 : index
+  // Loops with iter_args are not coalesced (would leave live block args).
+  // CHECK: %[[C17:.*]] = arith.constant 17 : index
+  // CHECK: affine.for %[[I:.*]] = 0 to 79
+  // CHECK: affine.for %[[J:.*]] = 0 to 64 iter_args(%[[ACC:.*]] = %[[ALLOC]])
+  // CHECK: %[[REM:.*]] = arith.remui %[[J]], %[[C17]]
+  // CHECK: %[[CAST:.*]] = arith.index_cast %[[J]]
+  // CHECK: memref.store %[[CAST]], %[[ACC]]{{\[}}%[[REM]]]
+  // CHECK: affine.yield %[[ACC]]
   affine.for %arg0 = 0 to 79 {
     %0 = affine.for %arg1 = 0 to 64 iter_args(%arg2 = %alloc) -> (memref<?xi64>) {
       %1 = arith.remui %arg1, %c17 : index
@@ -433,17 +441,6 @@ func.func @inner_loop_has_iter_args(%alloc : memref<?xi64>) {
   }
   return
 }
-
-// CHECK: %[[CONSTANT_0:.*]] = arith.constant 17 : index
-// CHECK: %[[APPLY_0:.*]] = affine.apply affine_map<() -> (79)>()
-// CHECK: %[[APPLY_1:.*]] = affine.apply affine_map<() -> (64)>()
-// CHECK: %[[APPLY_2:.*]] = affine.apply affine_map<(d0)[s0] -> (d0 * s0)>(%[[APPLY_0]]){{\[}}%[[APPLY_1]]]
-// CHECK: affine.for %[[IV:.*]] = 0 to %[[APPLY_2]] {
-// CHECK: %[[APPLY_3:.*]] = affine.apply affine_map<(d0)[s0] -> (d0 mod s0)>(%[[IV]]){{\[}}%[[APPLY_1]]]
-// CHECK:   %[[REMUI_0:.*]] = arith.remui %[[APPLY_3]], %[[CONSTANT_0]] : index
-// CHECK:   %[[INDEX_CAST_0:.*]] = arith.index_cast %[[APPLY_3]] : index to i64
-// CHECK:   memref.store %[[INDEX_CAST_0]], %[[ALLOC]]{{\[}}%[[REMUI_0]]] : memref<?xi64>
-// CHECK: }
 
 // -----
 
@@ -488,4 +485,25 @@ func.func @inner_loop_yields_induction_var() -> index {
     scf.yield %s : index
   }
   return %r : index
+}
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/216455
+// Outer loops without iter_args may coalesce; the iter_args nest is kept.
+// CHECK-LABEL: func @coalesce_skips_iter_args_nest
+func.func @coalesce_skips_iter_args_nest(%seed: i64, %out: memref<i64>) {
+  // CHECK: affine.for
+  // CHECK: %[[R:.*]] = affine.for {{.*}} iter_args
+  // CHECK: affine.store %[[R]]
+  affine.for %i = 0 to 4 {
+    affine.for %j = 0 to 4 {
+      %r = affine.for %k = 0 to 4 iter_args(%acc = %seed) -> (i64) {
+        %t = arith.addi %acc, %acc : i64
+        affine.yield %t : i64
+      }
+      affine.store %r, %out[] : memref<i64>
+    }
+  }
+  return
 }
