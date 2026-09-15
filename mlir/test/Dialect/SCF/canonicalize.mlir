@@ -2004,6 +2004,30 @@ func.func @inline_forall_loop(%in: tensor<8x8xf32>) -> tensor<8x8xf32> {
 
 // -----
 
+// Regression for https://github.com/llvm/llvm-project/issues/222143
+// Single-iteration forall promotion must map inserts to results by destination,
+// not by the order of parallel_insert_slice ops in in_parallel.
+func.func @inline_forall_non_sequential_shared_outs(
+    %init_a: tensor<1xf32>, %init_b: tensor<1xf32>,
+    %a: tensor<1xf32>, %b: tensor<1xf32>) -> (tensor<1xf32>, tensor<1xf32>) {
+  %0:2 = scf.forall (%i) in (1) shared_outs(%x = %init_a, %y = %init_b)
+      -> (tensor<1xf32>, tensor<1xf32>) {
+    scf.forall.in_parallel {
+      tensor.parallel_insert_slice %b into %y[0] [1] [1]
+          : tensor<1xf32> into tensor<1xf32>
+      tensor.parallel_insert_slice %a into %x[0] [1] [1]
+          : tensor<1xf32> into tensor<1xf32>
+    }
+  }
+  return %0#0, %0#1 : tensor<1xf32>, tensor<1xf32>
+}
+// CHECK-LABEL: func @inline_forall_non_sequential_shared_outs
+//  CHECK-SAME:   (%{{.*}}: tensor<1xf32>, %{{.*}}: tensor<1xf32>, %[[A:.*]]: tensor<1xf32>, %[[B:.*]]: tensor<1xf32>)
+//  CHECK-NOT:    scf.forall
+//       CHECK:   return %[[A]], %[[B]]
+
+// -----
+
 func.func @do_not_inline_distributed_forall_loop(
     %in: tensor<8x8xf32>) -> tensor<8x8xf32> {
   %cst = arith.constant 0.000000e+00 : f32

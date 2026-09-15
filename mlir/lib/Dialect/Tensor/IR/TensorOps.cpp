@@ -3900,6 +3900,21 @@ OpFoldResult PadOp::fold(FoldAdaptor) {
 //===----------------------------------------------------------------------===//
 
 OpResult ParallelInsertSliceOp::getTiedOpResult() {
+  // Prefer the destination region iter_arg: inserts may write shared_outs out
+  // of yielding-op order (llvm/llvm-project#222143).
+  if (auto destArg = dyn_cast<BlockArgument>(getDest())) {
+    Operation *parentOp = destArg.getOwner()->getParentOp();
+    if (auto loop = dyn_cast<LoopLikeOpInterface>(parentOp)) {
+      auto iterArgs = loop.getRegionIterArgs();
+      auto it = llvm::find(iterArgs, destArg);
+      if (it != iterArgs.end()) {
+        unsigned idx =
+            static_cast<unsigned>(std::distance(iterArgs.begin(), it));
+        return parentOp->getResult(idx);
+      }
+    }
+  }
+
   InParallelOpInterface parallelCombiningParent = getParallelCombiningParent();
   for (const auto &it :
        llvm::enumerate(parallelCombiningParent.getYieldingOps())) {

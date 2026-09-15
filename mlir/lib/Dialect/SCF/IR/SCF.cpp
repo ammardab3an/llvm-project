@@ -753,6 +753,29 @@ MutableArrayRef<OpOperand> ForallOp::getInitsMutable() {
 void mlir::scf::promote(RewriterBase &rewriter, scf::ForallOp forallOp) {
   OpBuilder::InsertionGuard g(rewriter);
   scf::InParallelOp terminator = forallOp.getTerminator();
+  unsigned rank = forallOp.getRank();
+
+  // Map each parallel_insert_slice to the forall result it updates via the
+  // destination region iter_arg. Inserts may write shared_outs out of order
+  // (llvm/llvm-project#222143), so yielding-op order is not the result order.
+  SmallVector<tensor::ParallelInsertSliceOp> insertOps;
+  SmallVector<unsigned> resultIndices;
+  insertOps.reserve(forallOp.getNumResults());
+  resultIndices.reserve(forallOp.getNumResults());
+  for (Operation &yieldingOp : terminator.getYieldingOps()) {
+    auto insertOp = dyn_cast<tensor::ParallelInsertSliceOp>(yieldingOp);
+    if (!insertOp)
+      continue;
+    auto destArg = dyn_cast<BlockArgument>(insertOp.getDest());
+    if (!destArg || destArg.getOwner() != forallOp.getBody() ||
+        destArg.getArgNumber() < rank)
+      continue;
+    unsigned resultIdx = destArg.getArgNumber() - rank;
+    if (resultIdx >= forallOp.getNumResults())
+      continue;
+    insertOps.push_back(insertOp);
+    resultIndices.push_back(resultIdx);
+  }
 
   // Replace block arguments with lower bounds (replacements for IVs) and
   // outputs.
@@ -764,26 +787,20 @@ void mlir::scf::promote(RewriterBase &rewriter, scf::ForallOp forallOp) {
   rewriter.inlineBlockBefore(forallOp.getBody(), forallOp->getBlock(),
                              forallOp->getIterator(), bbArgReplacements);
 
-  // Replace the terminator with tensor.insert_slice ops.
+  // Replace the terminator with tensor.insert_slice ops. Unused shared_outs
+  // keep the original output tensor.
   rewriter.setInsertionPointAfter(forallOp);
-  SmallVector<Value> results;
-  results.reserve(forallOp.getResults().size());
-  for (auto &yieldingOp : terminator.getYieldingOps()) {
-    auto parallelInsertSliceOp =
-        dyn_cast<tensor::ParallelInsertSliceOp>(yieldingOp);
-    if (!parallelInsertSliceOp)
-      continue;
-
-    Value dst = parallelInsertSliceOp.getDest();
-    Value src = parallelInsertSliceOp.getSource();
+  SmallVector<Value> results(forallOp.getOutputs().begin(),
+                             forallOp.getOutputs().end());
+  for (auto [insertOp, resultIdx] : llvm::zip_equal(insertOps, resultIndices)) {
+    Value dst = insertOp.getDest();
+    Value src = insertOp.getSource();
     if (llvm::isa<TensorType>(src.getType())) {
-      results.push_back(tensor::InsertSliceOp::create(
+      results[resultIdx] = tensor::InsertSliceOp::create(
           rewriter, forallOp.getLoc(), dst.getType(), src, dst,
-          parallelInsertSliceOp.getOffsets(), parallelInsertSliceOp.getSizes(),
-          parallelInsertSliceOp.getStrides(),
-          parallelInsertSliceOp.getStaticOffsets(),
-          parallelInsertSliceOp.getStaticSizes(),
-          parallelInsertSliceOp.getStaticStrides()));
+          insertOp.getOffsets(), insertOp.getSizes(), insertOp.getStrides(),
+          insertOp.getStaticOffsets(), insertOp.getStaticSizes(),
+          insertOp.getStaticStrides());
     } else {
       llvm_unreachable("unsupported terminator");
     }
