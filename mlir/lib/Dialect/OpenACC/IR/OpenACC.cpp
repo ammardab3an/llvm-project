@@ -5417,6 +5417,8 @@ mlir::Value mlir::acc::getVarPtrPtr(mlir::Operation *accDataClauseOp) {
 
 mlir::SmallVector<mlir::Value>
 mlir::acc::getBounds(mlir::Operation *accDataClauseOp) {
+  if (!accDataClauseOp)
+    return {};
   mlir::SmallVector<mlir::Value> bounds{
       llvm::TypeSwitch<mlir::Operation *, mlir::SmallVector<mlir::Value>>(
           accDataClauseOp)

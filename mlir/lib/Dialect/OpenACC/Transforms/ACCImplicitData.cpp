@@ -737,16 +737,21 @@ void ACCImplicitData::generateImplicitDataOps(
   auto dominatingDataClauses =
       acc::getDominatingDataClauses(computeConstructOp, domInfo, postDomInfo);
   for (auto var : candidateVars) {
-    auto newDataClauseOp = generateDataClauseOpForCandidate(
+    auto *newDataClauseOp = generateDataClauseOpForCandidate(
         var, module, builder, computeConstructOp, dominatingDataClauses,
         defaultClause);
+    // generateDataClauseOpForCandidate may return null (e.g. when a prior
+    // conversion erased related IR). Skip bound filling in that case rather
+    // than TypeSwitch/dyn_cast on a null op. Regression: #205284
+    if (!newDataClauseOp)
+      continue;
     fillInBoundsForUnknownDimensions(newDataClauseOp, builder);
     LLVM_DEBUG(llvm::dbgs() << "Generated data clause for " << var << ":\n"
                             << "\t" << *newDataClauseOp << "\n");
-    if (isa_and_nonnull<acc::PrivateOp, acc::FirstprivateOp, acc::ReductionOp>(
+    if (isa<acc::PrivateOp, acc::FirstprivateOp, acc::ReductionOp>(
             newDataClauseOp)) {
       newPrivateOperands.push_back(acc::getAccVar(newDataClauseOp));
-    } else if (isa_and_nonnull<ACC_DATA_CLAUSE_OPS>(newDataClauseOp)) {
+    } else if (isa<ACC_DATA_CLAUSE_OPS>(newDataClauseOp)) {
       newDataClauseOperands.push_back(acc::getAccVar(newDataClauseOp));
       dominatingDataClauses.push_back(acc::getAccVar(newDataClauseOp));
     }
