@@ -51,6 +51,20 @@ constexpr Chipset kGfx950 = Chipset(9, 5, 0);
 constexpr Chipset kGfx1200 = Chipset(12, 0, 0);
 constexpr Chipset kGfx1250 = Chipset(12, 5, 0);
 
+/// GEP flags for a known-inbounds memref access.
+/// `nuw` is only valid when every index*stride product cannot unsigned-wrap,
+/// which requires all strides to be statically non-negative. See MemRefToLLVM.
+static LLVM::GEPNoWrapFlags getMemRefAccessNoWrapFlags(MemRefType type) {
+  auto [strides, offset] = type.getStridesAndOffset();
+  (void)offset;
+  LLVM::GEPNoWrapFlags flags = LLVM::GEPNoWrapFlags::inbounds;
+  if (llvm::all_of(strides, [](int64_t s) {
+        return !ShapedType::isDynamic(s) && s >= 0;
+      }))
+    flags = flags | LLVM::GEPNoWrapFlags::nuw;
+  return flags;
+}
+
 // Predicates mirroring the LLVM AMDGPU `HasDot{N}Insts` features that gate
 // the `v_dot*` instructions consumed by the `amdgpu.dot` lowering.
 static bool hasDot1Insts(const Chipset &chipset) {
@@ -2368,7 +2382,7 @@ struct GlobalTransposeLoadOpLowering
 
     Value srcPtr = getStridedElementPtr(
         rewriter, loc, srcMemRefType, adaptor.getSrc(), adaptor.getSrcIndices(),
-        LLVM::GEPNoWrapFlags::inbounds | LLVM::GEPNoWrapFlags::nuw);
+        getMemRefAccessNoWrapFlags(srcMemRefType));
 
     size_t numElements = resultType.getNumElements();
     size_t elementTypeSize =
@@ -4520,8 +4534,7 @@ struct GlobalPrefetchOpLowering
     MemRefType memRefType = op.getSrc().getType();
     Location loc = op->getLoc();
     auto inboundsFlags = isSpeculative ? LLVM::GEPNoWrapFlags::none
-                                       : LLVM::GEPNoWrapFlags::inbounds |
-                                             LLVM::GEPNoWrapFlags::nuw;
+                                       : getMemRefAccessNoWrapFlags(memRefType);
     Value prefetchPtr = getStridedElementPtr(
         rewriter, loc, memRefType, descriptor, indices, inboundsFlags);
 

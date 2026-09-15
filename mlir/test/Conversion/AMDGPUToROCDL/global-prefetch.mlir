@@ -31,3 +31,19 @@ func.func @glb_prefetch3(%src : memref<64x64xf16, #gpu.address_space<global>>, %
   amdgpu.global_prefetch %src[%i, %j] NT_RT SE speculative : memref<64x64xf16, #gpu.address_space<global>>
   func.return
 }
+
+// -----
+
+// Negative static strides must not get `nuw`. Regression: #221412
+// CHECK-LABEL: @glb_prefetch_neg_stride
+// CHECK-NOT: overflow<nsw, nuw>
+// CHECK-NOT: nuw
+func.func @glb_prefetch_neg_stride(
+    %src : memref<64x64xf16, strided<[64, -1], offset: 63>, #gpu.address_space<global>>,
+    %i : i64, %j : i64) {
+  // CHECK: %[[PTR:.*]] = llvm.getelementptr inbounds %{{.*}}[%{{.*}}] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+  // CHECK: rocdl.global.prefetch %[[PTR]], gfx12<lu> : !llvm.ptr<1>
+  amdgpu.global_prefetch %src[%i, %j] HT WGP
+    : memref<64x64xf16, strided<[64, -1], offset: 63>, #gpu.address_space<global>>
+  func.return
+}

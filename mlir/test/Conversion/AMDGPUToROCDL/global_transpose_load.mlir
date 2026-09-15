@@ -55,3 +55,21 @@ func.func @global_transpose_load_16xi6(%i : index, %j : index,
          : memref<128x32xi8, #gpu.address_space<global>> -> vector<16xi6>
   return %0 : vector<16xi6>
 }
+
+// -----
+
+// Negative static strides must not get `nuw` (unsigned wrap on idx*(-1)).
+// Regression: llvm/llvm-project#221412
+// CHECK-LABEL: func @global_transpose_load_neg_stride
+// CHECK-NOT: overflow<nsw, nuw>
+// CHECK-NOT: nuw
+func.func @global_transpose_load_neg_stride(%i : index, %j : index,
+    %src : memref<128x256xf16, strided<[256, -1], offset: 255>, #gpu.address_space<global>>)
+    -> vector<8xf16> {
+  // CHECK: llvm.getelementptr inbounds
+  // CHECK: rocdl.global.load.tr.b128
+  // CHECK-OLD: error: 'amdgpu.global_transpose_load' op global_transpose_load is only supported on gfx1200+
+  %0 = amdgpu.global_transpose_load %src[%i, %j]
+         : memref<128x256xf16, strided<[256, -1], offset: 255>, #gpu.address_space<global>> -> vector<8xf16>
+  return %0 : vector<8xf16>
+}
