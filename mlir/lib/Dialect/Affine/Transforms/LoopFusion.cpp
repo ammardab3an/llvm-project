@@ -1365,6 +1365,12 @@ public:
     // Returns true if 'sibNode' can be fused with 'dstNode' for input reuse
     // on 'memref'.
     auto canFuseWithSibNode = [&](Node *sibNode, Value memref) {
+      // Skip if 'sibNode' is a loop nest returning values. Sibling fusion
+      // removes the sibling loop nest after fusion, but does not redirect
+      // external uses of its results, which would leave dangling operands.
+      // TODO: support loop nests that return values.
+      if (isa<AffineForOp>(sibNode->op) && sibNode->op->getNumResults() > 0)
+        return false;
       // Skip if 'outEdge' is not a read-after-write dependence.
       // TODO: Remove restrict to single load op restriction.
       if (sibNode->getLoadOpCount(memref) != 1)
