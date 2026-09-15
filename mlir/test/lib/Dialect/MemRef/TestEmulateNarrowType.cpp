@@ -26,6 +26,21 @@ using namespace mlir;
 
 namespace {
 
+/// Packed-integer emulation only applies to scalar int/float memref elements.
+/// Memrefs of vectors (llvm/llvm-project#206625) keep their original load/store
+/// types even if the loaded vector itself would otherwise be widened.
+bool isLegalForNarrowTypeEmulation(Operation *op,
+                                   const TypeConverter &typeConverter) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+    if (!loadOp.getMemRefType().getElementType().isIntOrFloat())
+      return true;
+  } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+    if (!storeOp.getMemRefType().getElementType().isIntOrFloat())
+      return true;
+  }
+  return typeConverter.isLegal(op);
+}
+
 struct TestEmulateNarrowTypePass
     : public PassWrapper<TestEmulateNarrowTypePass,
                          OperationPass<func::FuncOp>> {
@@ -91,7 +106,7 @@ struct TestEmulateNarrowTypePass
       return typeConverter.isLegal(cast<func::FuncOp>(op).getFunctionType());
     });
     auto opLegalCallback = [&typeConverter](Operation *op) {
-      return typeConverter.isLegal(op);
+      return isLegalForNarrowTypeEmulation(op, typeConverter);
     };
     target.addDynamicallyLegalOp<func::CallOp, func::ReturnOp>(opLegalCallback);
     target.addDynamicallyLegalDialect<
@@ -180,7 +195,7 @@ struct TestMemRefFlattenAndVectorNarrowTypeEmulationPass
       return typeConverter.isLegal(cast<func::FuncOp>(op).getFunctionType());
     });
     auto opLegalCallback = [&typeConverter](Operation *op) {
-      return typeConverter.isLegal(op);
+      return isLegalForNarrowTypeEmulation(op, typeConverter);
     };
     target.addDynamicallyLegalOp<func::CallOp, func::ReturnOp>(opLegalCallback);
     target.addDynamicallyLegalDialect<
