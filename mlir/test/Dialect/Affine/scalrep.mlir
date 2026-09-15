@@ -1034,3 +1034,39 @@ func.func @vector_store_dead_elim_same_type(%arg0: memref<20x1xi64>) {
   affine.vector_store %cst2, %arg0[%c0, %c0] : memref<20x1xi64>, vector<5xi64>
   return
 }
+
+// -----
+
+// Regression test for llvm/llvm-project#216916: load CSE must not replace a
+// load with another load that is already scheduled for erasure.
+memref.global "private" @g_scalrep_cse : memref<4xi64> = dense<[1, 2, 3, 4]>
+// CHECK-LABEL: func @load_cse_do_not_replace_with_erased_load
+func.func @load_cse_do_not_replace_with_erased_load() -> index {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %c7 = arith.constant 7 : i64
+  %m = memref.get_global @g_scalrep_cse : memref<4xi64>
+  // CHECK: %[[A:.*]] = affine.load %{{.*}}[3]
+  %a = affine.load %m[3] : memref<4xi64>
+  affine.store %c7, %m[0] : memref<4xi64>
+  // The second load is CSEd to the first; must not leave a use of the erased op.
+  // CHECK-NOT: affine.load %{{.*}}[3]
+  %b = affine.load %m[3] : memref<4xi64>
+  // CHECK: scf.for
+  %s = scf.for %i = %c0 to %c2 step %c1 iter_args(%acc = %c0) -> (index) {
+    // Nested load cannot safely use the outer CSEd value across the store;
+    // it must remain (or use a still-live load), never an erased load.
+    // CHECK: affine.load %{{.*}}[3]
+    %c = affine.load %m[3] : memref<4xi64>
+    %x = index.castu %c : i64 to index
+    %y = index.add %acc, %x
+    scf.yield %y : index
+  }
+  %p = index.castu %a : i64 to index
+  %q = index.castu %b : i64 to index
+  %r = index.add %s, %p
+  %t = index.add %r, %q
+  // CHECK: return
+  return %t : index
+}

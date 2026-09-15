@@ -978,6 +978,12 @@ static void loadCSE(AffineReadOpInterface loadA,
     if (!loadB || loadB == loadA)
       continue;
 
+    // Skip loads already scheduled for erasure. Replacing with such a load
+    // re-introduces uses on an op that will be deleted (e.g. load C -> load B
+    // after load B -> load A). Regression: llvm/llvm-project#216916
+    if (llvm::is_contained(loadOpsToErase, loadB.getOperation()))
+      continue;
+
     MemRefAccess srcAccess(loadB);
     MemRefAccess destAccess(loadA);
 
