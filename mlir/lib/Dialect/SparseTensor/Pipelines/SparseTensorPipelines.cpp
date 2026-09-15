@@ -78,9 +78,11 @@ void mlir::sparse_tensor::buildSparsifier(OpPassManager &pm,
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
   pm.addNestedPass<func::FuncOp>(createConvertVectorToSCFPass());
   pm.addNestedPass<func::FuncOp>(memref::createExpandReallocPass());
-  pm.addNestedPass<func::FuncOp>(createSCFToControlFlowPass());
+  // Lower affine before SCF-to-CF. `scf` nested in `affine.for` would otherwise
+  // become multi-block `affine.for` regions (illegal). Regression: #217895
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createLowerAffinePass());
+  pm.addNestedPass<func::FuncOp>(createSCFToControlFlowPass());
   pm.addPass(
       createConvertVectorToLLVMPass(options.convertVectorToLLVMOptions()));
   pm.addNestedPass<func::FuncOp>(createConvertComplexToStandardPass());
