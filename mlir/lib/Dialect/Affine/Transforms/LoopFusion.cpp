@@ -1327,6 +1327,15 @@ public:
         continue;
       }
 
+      // Sibling fusion erases the sibling nest. Skip if its results are still
+      // live (e.g. affine.for with iter_args whose value is returned).
+      // Regression: llvm/llvm-project#216464
+      if (!sibAffineForOp->use_empty()) {
+        LDBG() << "Sibling nest has live results; not performing sibling "
+                  "fusion.";
+        continue;
+      }
+
       // Check if source loop is being inserted in the innermost
       // destination loop. Based on this, the fused loop may be optimized
       // further inside `fuseLoops`.
