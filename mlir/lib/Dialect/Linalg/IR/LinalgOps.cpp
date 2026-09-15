@@ -5328,27 +5328,27 @@ template SmallVector<int64_t>
     getPackedOuterShapeWithoutTransposition<UnPackOp>(UnPackOp);
 
 // Given the (potentially) updated packed type, `newPackedTy`, generates an
-// updated mixed-tile-sizes list. For each inner packed dimension that is static
-// in `newPackedTy`, the tile is set to that static size (replacing SSA values
-// or mismatched constants). Dynamic packed dimensions preserve the original
-// tile. The folded tensor type is treated as authoritative for static extents.
-// Note - packed-type-dim and mixed-tile-size should always match!
-static SmallVector<OpFoldResult>
+// updated mixed-tile-sizes list. Dynamic packed dimensions keep the original
+// tile. Static packed dimensions may refine a *matching constant* tile to an
+// attribute; a non-constant or mismatched tile is independent of the dest/src
+// type and must not be overwritten (that used to assert, then silently
+// miscompile). Regression: llvm/llvm-project#189313
+static FailureOr<SmallVector<OpFoldResult>>
 getNewMixedTileSizes(PatternRewriter &rewriter, Type newPackedTy,
                      ArrayRef<OpFoldResult> mixedTiles) {
   SmallVector<OpFoldResult> newMixedTileSizes;
-  for (auto it : llvm::zip(cast<ShapedType>(newPackedTy)
-                               .getShape()
-                               .take_back(mixedTiles.size()),
-                           mixedTiles)) {
-    int64_t dimSize = std::get<0>(it);
-    if (dimSize == ShapedType::kDynamic) {
-      newMixedTileSizes.push_back(std::get<1>(it));
+  ArrayRef<int64_t> innerShape =
+      cast<ShapedType>(newPackedTy).getShape().take_back(mixedTiles.size());
+  for (auto [dimSize, tile] : llvm::zip_equal(innerShape, mixedTiles)) {
+    if (ShapedType::isDynamic(dimSize)) {
+      newMixedTileSizes.push_back(tile);
       continue;
     }
+    std::optional<int64_t> cst = getConstantIntValue(tile);
+    if (!cst || *cst != dimSize)
+      return failure();
     newMixedTileSizes.push_back(rewriter.getIndexAttr(dimSize));
   }
-
   return newMixedTileSizes;
 }
 
@@ -6325,8 +6325,11 @@ struct FoldTensorCastPackOp : public OpRewritePattern<PackOp> {
         tensor::getUpdatedOperandsAfterCastOpFolding(op, newResultTypes);
 
     // Get the updated mixed-tile-sizes attribute.
-    SmallVector<OpFoldResult> newMixedTileSizes =
+    FailureOr<SmallVector<OpFoldResult>> maybeNewTiles =
         getNewMixedTileSizes(rewriter, newResultTypes[0], op.getMixedTiles());
+    if (failed(maybeNewTiles))
+      return failure();
+    SmallVector<OpFoldResult> newMixedTileSizes = *maybeNewTiles;
     if (llvm::any_of(newMixedTileSizes, isZeroInteger))
       return failure();
 
@@ -6808,8 +6811,11 @@ struct FoldTensorCastUnPackOp : public OpRewritePattern<UnPackOp> {
     Value sourceTensor = newOperands[0];
 
     // Get the updated mixed-tile-sizes attribute.
-    SmallVector<OpFoldResult> newMixedTileSizes = getNewMixedTileSizes(
+    FailureOr<SmallVector<OpFoldResult>> maybeNewTiles = getNewMixedTileSizes(
         rewriter, sourceTensor.getType(), op.getMixedTiles());
+    if (failed(maybeNewTiles))
+      return failure();
+    SmallVector<OpFoldResult> newMixedTileSizes = *maybeNewTiles;
 
     // Clone op.
     // TODO: Strictly speaking, discardable attributes should be _discarded_ at
