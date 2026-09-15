@@ -183,45 +183,40 @@ static void testNoSkipErasureCallbacks(Operation *op) {
     op->erase();
   };
   auto noSkipBlockErasure = [](Block *block) {
-    if (block->use_empty()) {
-      llvm::outs() << "Erasing ";
-      printBlock(block);
-      llvm::outs() << "\n";
-
-      // Only drop uses from operations within the same parent region. This
-      // avoids erasing operations with their uses still intact and eliminates
-      // such crashes.
-      // Note: We do not drop the use when the parent region is different for
-      // it, because this means that the use's region holding op is a child of
-      // the region holding op containing the current block and was expected to
-      // be visited and erased first - we should correctly fail here.
-      Region *blockParentRegion = block->getParent();
-      for (Operation &op : *block) {
-        for (OpOperand &use : llvm::make_early_inc_range(op.getUses())) {
-          // Early continue if the parent regions are not same.
-          if (blockParentRegion != use.getOwner()->getParentRegion())
-            continue;
-          use.drop();
-        }
-      }
-
-      // Also drop uses of block arguments that are consumed within the same
-      // region. This handles cases like function entry blocks whose arguments
-      // are used by ops in sibling blocks.
-      for (BlockArgument arg : block->getArguments()) {
-        for (OpOperand &use : llvm::make_early_inc_range(arg.getUses())) {
-          if (blockParentRegion != use.getOwner()->getParentRegion())
-            continue;
-          use.drop();
-        }
-      }
-
-      block->erase();
-    } else {
+    if (!block->use_empty()) {
       llvm::outs() << "Cannot erase ";
       printBlock(block);
       llvm::outs() << ", still has uses\n";
+      return;
     }
+
+    // Values defined in this block may still be used from nested regions of
+    // ops in *other* blocks (e.g. a constant in the entry block used by
+    // `memref.alloca_scope.return` in a successor). Block post-order walks
+    // nest regions before the containing block, but sibling CFG blocks are
+    // still visited in forward order — so the entry block can be erased while
+    // such uses remain. Refuse to erase rather than LLVM-error. Regression:
+    // llvm/llvm-project#220570
+    auto hasLiveDefinedUses = [&]() {
+      for (Operation &op : *block)
+        if (!op.use_empty())
+          return true;
+      for (BlockArgument arg : block->getArguments())
+        if (!arg.use_empty())
+          return true;
+      return false;
+    };
+    if (hasLiveDefinedUses()) {
+      llvm::outs() << "Cannot erase ";
+      printBlock(block);
+      llvm::outs() << ", defined values still have uses\n";
+      return;
+    }
+
+    llvm::outs() << "Erasing ";
+    printBlock(block);
+    llvm::outs() << "\n";
+    block->erase();
   };
 
   llvm::outs() << "Op post-order erasures (no skip)"

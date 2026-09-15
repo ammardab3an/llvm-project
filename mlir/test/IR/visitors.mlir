@@ -143,8 +143,8 @@ func.func @structured_cfg() {
 // CHECK-LABEL: Block post-order erasures (no skip)
 // CHECK:       Erasing block ^bb0 from region 0 from operation 'scf.if'
 // CHECK:       Erasing block ^bb0 from region 1 from operation 'scf.if'
-// CHECK:       Erasing block ^bb0 from region 0 from operation 'scf.for'
-// CHECK:       Erasing block ^bb0 from region 0 from operation 'func.func'
+// CHECK:       Cannot erase block ^bb0 from region 0 from operation 'scf.for', defined values still have uses
+// CHECK:       Cannot erase block ^bb0 from region 0 from operation 'func.func', defined values still have uses
 // CHECK:       Erasing block ^bb0 from region 0 from operation 'builtin.module'
 
 // -----
@@ -469,4 +469,21 @@ module attributes {gpu.container_module, llvm.data_layout = ""} {
       return %result : i32
     }
   }
+}
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/220570
+// Entry-block values used from nested regions in successor blocks must not
+// cause a fatal error when the visitor attempts block erasure.
+// CHECK-LABEL: Block post-order erasures (no skip)
+// CHECK: Cannot erase block ^bb0 from region 0 from operation 'func.func', defined values still have uses
+func.func private @cross_block_nested_use() {
+  %cst = arith.constant 1.0 : f16
+  cf.br ^bb1
+^bb1:
+  %0 = memref.alloca_scope -> (f16) {
+    memref.alloca_scope.return %cst : f16
+  }
+  return
 }
