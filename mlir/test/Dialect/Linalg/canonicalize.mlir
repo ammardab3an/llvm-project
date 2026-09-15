@@ -2460,12 +2460,14 @@ func.func @negative_unpack_pack_memref_no_canonicalization(%packed: memref<16x8x
 
 // -----
 // CHECK-LABEL: func.func @fold_unpack_cast_inner_tile_dynamic_arg
+// Dynamic inner tiles must not be rewritten from the refined packed type.
 // CHECK-SAME:  %[[SRC:.+]]: tensor<1x3x8x1xi32>, %[[TILE:.+]]: index
 // CHECK:   %[[EMPTY:.+]] = tensor.empty() : tensor<7x3xi32>
-// CHECK:       %[[UNPACK:.+]] = linalg.unpack %[[SRC]]
+// CHECK:   %[[CAST:.+]] = tensor.cast %[[SRC]]
+// CHECK:       %[[UNPACK:.+]] = linalg.unpack %[[CAST]]
 // CHECK-SAME:    inner_dims_pos = [0, 1]
-// CHECK-SAME:    inner_tiles = [8, 1]
-// CHECK-SAME:    into %[[EMPTY]] : tensor<1x3x8x1xi32> -> tensor<7x3xi32>
+// CHECK-SAME:    inner_tiles = [%[[TILE]], 1]
+// CHECK-SAME:    into %[[EMPTY]]
 // CHECK:       return %[[UNPACK]] : tensor<7x3xi32>
 func.func @fold_unpack_cast_inner_tile_dynamic_arg(%arg0: tensor<1x3x8x1xi32>, %arg1: index) -> tensor<7x3xi32> {
   %0 = tensor.empty() : tensor<7x3xi32>
@@ -2476,13 +2478,11 @@ func.func @fold_unpack_cast_inner_tile_dynamic_arg(%arg0: tensor<1x3x8x1xi32>, %
 
 
 // -----
-// Mismatched constant tile vs static packed shape: fold still drops the cast and
-// takes inner tile sizes from the refined packed type.
+// Mismatched constant tile vs static packed shape: do not fold the cast.
 // CHECK-LABEL: func.func @fold_unpack_cast_inner_tile_inlined_mismatch
-// CHECK:       %[[EMPTY:.+]] = tensor.empty() : tensor<7x3xi32>
-// CHECK-NOT:   tensor.cast
-// CHECK:       %[[UNPACK:.+]] = linalg.unpack %{{.+}} inner_dims_pos = [0, 1] inner_tiles = [8, 1]
-// CHECK-SAME:    into %[[EMPTY]] : tensor<1x3x8x1xi32> -> tensor<7x3xi32>
+// CHECK-DAG:   %[[C256:.+]] = arith.constant 256 : index
+// CHECK:       tensor.cast
+// CHECK:       %[[UNPACK:.+]] = linalg.unpack %{{.+}} inner_dims_pos = [0, 1] inner_tiles = [%[[C256]], 1]
 // CHECK:       return %[[UNPACK]] : tensor<7x3xi32>
 func.func @fold_unpack_cast_inner_tile_inlined_mismatch(%arg0: tensor<1x3x8x1xi32>) -> tensor<7x3xi32> {
   %c256 = arith.constant 256 : index
@@ -2535,4 +2535,23 @@ func.func @no_fold_pack_cast_inner_tile_inlined_mismatch(%arg0: tensor<8x3xi32>,
     inner_tiles = [%c256, 1]
     into %dest : tensor<?x?xi32> -> tensor<?x3x?x1xi32>
   return %pack : tensor<?x3x?x1xi32>
+}
+
+// -----
+
+// Dest-side tensor.cast with a non-constant inner tile must not rewrite the
+// tile from the dest shape. Regression: llvm/llvm-project#189313
+// CHECK-LABEL: func.func @no_fold_pack_dest_cast_dynamic_tile
+// CHECK:         inner_tiles = [%{{.*}}, 1]
+// CHECK-NOT:     inner_tiles = [8, 1]
+func.func @no_fold_pack_dest_cast_dynamic_tile(
+    %src: tensor<?x3xi32>, %dest: tensor<?x3x8x1xi32>, %tile_size: index)
+    -> tensor<?x3x8x1xi32> {
+  %dest_dyn = tensor.cast %dest : tensor<?x3x8x1xi32> to tensor<?x?x?x1xi32>
+  %pack = linalg.pack %src
+    inner_dims_pos = [0, 1]
+    inner_tiles = [%tile_size, 1]
+    into %dest_dyn : tensor<?x3xi32> -> tensor<?x?x?x1xi32>
+  %cast_back = tensor.cast %pack : tensor<?x?x?x1xi32> to tensor<?x3x8x1xi32>
+  return %cast_back : tensor<?x3x8x1xi32>
 }
