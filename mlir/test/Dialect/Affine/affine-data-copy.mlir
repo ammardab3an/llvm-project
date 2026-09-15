@@ -495,3 +495,21 @@ func.func @multiple_blocks(%arg0: index) -> memref<1x2x1xi32> {
 ^bb3:  // pred: ^bb1
   return %1 : memref<1x2x1xi32>
 }
+
+// -----
+
+// Copy-in for a memref must be inserted after its SSA definition.
+// Regression: llvm/llvm-project#216630
+// CHECK-LABEL: func @copy_after_get_global
+memref.global "private" constant @g1 : memref<8xi64> = dense<[0, 1, 2, 3, 4, 5, 6, 7]>
+memref.global "private" constant @g2 : memref<8xi64> = dense<[7, 6, 5, 4, 3, 2, 1, 0]>
+func.func @copy_after_get_global(%s: index, %t: index) -> i64 {
+  %a = memref.get_global @g1 : memref<8xi64>
+  %x = affine.load %a[symbol(%s)] : memref<8xi64>
+  %b = memref.get_global @g2 : memref<8xi64>
+  // CHECK: memref.get_global @g2
+  // CHECK: affine.load %{{.*}}[{{.*}}] : memref<8xi64>
+  %y = affine.load %b[symbol(%t)] : memref<8xi64>
+  %r = arith.addi %x, %y : i64
+  return %r : i64
+}
