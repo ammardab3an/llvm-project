@@ -1699,10 +1699,11 @@ FailureOr<scf::ParallelOp> mlir::parallelLoopUnrollByFactors(
     function_ref<void(unsigned, Operation *, OpBuilder)> annotateFn,
     IRMapping *clonedToSrcOpsMap) {
   const unsigned numLoops = op.getNumLoops();
-  assert(llvm::none_of(unrollFactors, [](uint64_t f) { return f == 0; }) &&
-         "Expected positive unroll factors");
-  assert((!unrollFactors.empty() && (unrollFactors.size() <= numLoops)) &&
-         "Expected non-empty unroll factors of size <= to the number of loops");
+  if (unrollFactors.empty() || unrollFactors.size() > numLoops)
+    return rewriter.notifyMatchFailure(
+        op, "expected non-empty unroll factors of size <= number of loops");
+  if (llvm::any_of(unrollFactors, [](uint64_t f) { return f == 0; }))
+    return rewriter.notifyMatchFailure(op, "expected positive unroll factors");
 
   // Bail out if no valid unroll factors were provided
   if (llvm::all_of(unrollFactors, [](uint64_t f) { return f == 1; }))
