@@ -923,3 +923,24 @@ func.func private @transfer_write_no_alloc_scope()
 %cst = arith.constant dense<0.0> : vector<2x3xf32>
 %m = memref.alloc() : memref<2x3xf32>
 vector.transfer_write %cst, %m[%c0, %c0] : vector<2x3xf32>, memref<2x3xf32>
+
+// -----
+
+// Staging alloca must be hoisted out of enclosing scf.for. Regression: #223187
+// CHECK-LABEL: func @transfer_alloca_outside_loop
+// FULL-UNROLL-LABEL: func @transfer_alloca_outside_loop
+// CHECK: memref.alloca() : memref<vector<2x4xf32>>
+// CHECK: scf.for
+func.func @transfer_alloca_outside_loop(%a: memref<8x4xf32>) {
+  %c0 = arith.constant 0 : index
+  %c2 = arith.constant 2 : index
+  %c8 = arith.constant 8 : index
+  %pad = arith.constant 0.0 : f32
+  scf.for %i = %c0 to %c8 step %c2 {
+    %v = vector.transfer_read %a[%i, %c0], %pad {in_bounds = [true, true]}
+      : memref<8x4xf32>, vector<2x4xf32>
+    vector.transfer_write %v, %a[%i, %c0] {in_bounds = [true, true]}
+      : vector<2x4xf32>, memref<8x4xf32>
+  }
+  return
+}

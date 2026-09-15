@@ -283,12 +283,27 @@ struct BufferAllocs {
   Value maskBuffer;
 };
 
-// TODO: Parallelism and threadlocal considerations with a ParallelScope trait.
+// Skip SCF loops: they carry AutomaticAllocationScope, but convert-scf-to-cf
+// turns them into CFG and an inner alloca then runs every iteration (stack
+// overflow at -O0). Affine loops stay structured, so they remain valid scopes.
+// Regression: llvm/llvm-project#223187
+static bool isSCFLoopAllocScope(Operation *op) {
+  return isa<scf::ForOp, scf::WhileOp, scf::ForallOp>(op);
+}
+
 static Operation *getAutomaticAllocationScope(Operation *op) {
-  Operation *scope =
-      op->getParentWithTrait<OpTrait::AutomaticAllocationScope>();
-  assert(scope && "Expected op to be inside automatic allocation scope");
-  return scope;
+  Operation *fallback = nullptr;
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    if (!parent->hasTrait<OpTrait::AutomaticAllocationScope>())
+      continue;
+    if (!fallback)
+      fallback = parent;
+    if (!isSCFLoopAllocScope(parent))
+      return parent;
+  }
+  assert(fallback && "Expected op to be inside automatic allocation scope");
+  return fallback;
 }
 
 /// Allocate temporary buffers for data (vector) and mask (if present).
