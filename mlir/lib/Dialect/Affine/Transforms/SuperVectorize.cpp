@@ -1265,6 +1265,19 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp,
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ permutationMap: ");
   LLVM_DEBUG(permutationMap.print(dbgs()));
 
+  // transfer_read supports broadcast dims in the permutation map, but this
+  // pass builds the vector type only from strategy->vectorSizes. A map with
+  // broadcast results (or any other result-count mismatch) would assert in
+  // createReadOrMaskedRead. Bail out instead (see #220566).
+  if (permutationMap.getNumResults() != state.strategy->vectorSizes.size() ||
+      llvm::any_of(permutationMap.getResults(),
+                   llvm::IsaPred<AffineConstantExpr>)) {
+    LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ load permutation map result "
+                         "count/broadcast incompatible with vector sizes, "
+                         "bailing out\n");
+    return nullptr;
+  }
+
   Value transferVal = createReadOrMaskedRead(
       state.builder, loadOp.getLoc(), loadOp.getMemRef(), vectorType,
       /*padValue=*/std::nullopt, /*useInBoundsInsteadOfMasking=*/true, indices,
