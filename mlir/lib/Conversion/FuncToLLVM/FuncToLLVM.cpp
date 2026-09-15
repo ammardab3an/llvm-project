@@ -118,6 +118,11 @@ static void wrapForExternalCallers(OpBuilder &rewriter, Location loc,
   auto type = cast<FunctionType>(funcOp.getFunctionType());
   auto [wrapperFuncType, resultStructType] =
       typeConverter.convertFunctionTypeCWrapper(type);
+  // convertFunctionTypeCWrapper fails when an argument/result is not LLVM
+  // compatible (e.g. !async.token kept by structural conversions). Do not
+  // create a wrapper with a null type.
+  if (!wrapperFuncType)
+    return;
 
   SmallVector<NamedAttribute> attributes;
   filterFuncAttributes(funcOp, attributes);
@@ -180,10 +185,11 @@ static void wrapExternalFunction(OpBuilder &builder, Location loc,
   auto [wrapperType, resultStructType] =
       typeConverter.convertFunctionTypeCWrapper(
           cast<FunctionType>(funcOp.getFunctionType()));
-  // This conversion can only fail if it could not convert one of the argument
-  // types. But since it has been applied to a non-wrapper function before, it
-  // should have failed earlier and not reach this point at all.
-  assert(wrapperType && "unexpected type conversion failure");
+  // Structural type conversions may leave non-LLVM types (e.g. !async.token)
+  // that convertFunctionTypeCWrapper cannot handle. Bail out instead of
+  // asserting / creating a null-typed function.
+  if (!wrapperType)
+    return;
 
   SmallVector<NamedAttribute, 4> attributes;
   filterFuncAttributes(funcOp, attributes);

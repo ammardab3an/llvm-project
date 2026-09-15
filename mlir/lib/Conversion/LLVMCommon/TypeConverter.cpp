@@ -396,6 +396,19 @@ Type LLVMTypeConverter::convertFunctionSignatureImpl(
           : packFunctionResults(funcTy.getResults(), useBarePtrCallConv);
   if (!resultType)
     return {};
+
+  // Reject signatures that still contain non-LLVM types after conversion.
+  // Structural converters (e.g. Async) may identity-map dialect types so later
+  // patterns can rewrite them; those must not produce llvm.func / C wrappers.
+  // Without this check, convertFunctionTypeCWrapper returns null and
+  // wrapForExternalCallers crashes in TypeAttr::get. Regression:
+  // llvm/llvm-project#216268
+  if (!LLVM::isCompatibleType(resultType))
+    return {};
+  for (Type t : result.getConvertedTypes())
+    if (!LLVM::isCompatibleType(t))
+      return {};
+
   return LLVM::LLVMFunctionType::get(resultType, result.getConvertedTypes(),
                                      isVariadic);
 }
