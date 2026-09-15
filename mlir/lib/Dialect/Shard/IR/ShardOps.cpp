@@ -866,27 +866,27 @@ public:
       return failure();
     }
 
-    // Iterate through the uses of the value to find a duplicate ShardOp.
-    for (auto &use : value.getUses()) {
-      if (use.getOwner() != op.getOperation()) {
-        auto otherOp = dyn_cast<ShardOp>(use.getOwner());
-        if (!otherOp || !otherOp->isBeforeInBlock(op)) {
-          return failure();
-        }
-        // Create a Sharding object for the current and the other ShardOp
-        // If the two are equal replace current op with the other op.
-        Sharding currentSharding(op.getSharding());
-        Sharding otherSharding(otherOp.getSharding());
-        if (currentSharding == otherSharding) {
-          b.replaceAllUsesWith(op.getResult(), otherOp.getResult());
-          b.eraseOp(op.getOperation());
-        } else {
-          // use the other sharding as input for op
-          b.modifyOpInPlace(
-              op, [&]() { op.getSrcMutable().assign(otherOp.getResult()); });
-        }
-        return success();
+    // Iterate through the uses of the value to find a duplicate ShardOp in the
+    // same block. Uses in nested regions must be skipped: isBeforeInBlock
+    // requires a shared parent block.
+    for (OpOperand &use : value.getUses()) {
+      auto otherOp = dyn_cast<ShardOp>(use.getOwner());
+      if (!otherOp || otherOp == op || otherOp->getBlock() != op->getBlock() ||
+          !otherOp->isBeforeInBlock(op))
+        continue;
+      // Create a Sharding object for the current and the other ShardOp
+      // If the two are equal replace current op with the other op.
+      Sharding currentSharding(op.getSharding());
+      Sharding otherSharding(otherOp.getSharding());
+      if (currentSharding == otherSharding) {
+        b.replaceAllUsesWith(op.getResult(), otherOp.getResult());
+        b.eraseOp(op.getOperation());
+      } else {
+        // use the other sharding as input for op
+        b.modifyOpInPlace(
+            op, [&]() { op.getSrcMutable().assign(otherOp.getResult()); });
       }
+      return success();
     }
 
     return failure();
