@@ -94,9 +94,19 @@ public:
     auto func = module.lookupSymbol<func::FuncOp>(result.getAttr());
 
     if (!func) {
-      // Create the function if not already exist.
+      // Create the function if not already exist. Insertion point is before the
+      // enclosing func.func. When the insertion point is under a different
+      // function-like op (e.g. llvm.func), there is no func.func parent — fall
+      // back to inlining instead of setInsertionPoint(nullptr).
+      // Regression: llvm/llvm-project#211187
+      func::FuncOp parentFunc = builder.getInsertionBlock()
+                                    ->getParent()
+                                    ->getParentOfType<func::FuncOp>();
+      if (!parentFunc)
+        return genImplementation(retTypes, params, builder, loc);
+
       OpBuilder::InsertionGuard insertionGuard(builder);
-      builder.setInsertionPoint(getParentOpOf<func::FuncOp>(builder));
+      builder.setInsertionPoint(parentFunc);
       func = func::FuncOp::create(
           builder, loc, funcName,
           FunctionType::get(context, params.getTypes(), retTypes));
