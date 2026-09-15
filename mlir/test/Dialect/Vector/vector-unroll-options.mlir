@@ -888,3 +888,18 @@ func.func @vector_multi_reduction_rank_mismatch(%v : vector<2x2x4xf32>, %acc: ve
 //       CHECK:   %[[V1:.*]] = vector.insert_strided_slice %[[R1]], %[[V0]] offsets = [0, 0], strides = [1, 1] : vector<1x2xf32> into vector<2x2xf32>
 //       CHECK:   %[[V2:.*]] = vector.insert_strided_slice %[[R3]], %[[V1]] offsets = [1, 0], strides = [1, 1] : vector<1x2xf32> into vector<2x2xf32>
 //       CHECK:   return %[[V2]] : vector<2x2xf32>
+
+// -----
+
+// Rank-mismatched native shape must not crash when unrolling create_mask.
+// The default create_mask unroll target is <8x8>; a 3-D mask must be left alone.
+// Regression for https://github.com/llvm/llvm-project/issues/217175
+func.func @vector_create_mask_rank_mismatch(%size: index) -> vector<8x8x8xi1> {
+  %c8 = arith.constant 8 : index
+  %0 = vector.create_mask %c8, %size, %c8 : vector<8x8x8xi1>
+  return %0 : vector<8x8x8xi1>
+}
+// CHECK-LABEL: func @vector_create_mask_rank_mismatch
+// CHECK: %[[MASK:.*]] = vector.create_mask
+// CHECK-SAME: vector<8x8x8xi1>
+// CHECK: return %[[MASK]]

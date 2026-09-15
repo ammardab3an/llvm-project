@@ -1072,6 +1072,14 @@ struct UnrollCreateMaskPattern : public OpRewritePattern<vector::CreateMaskOp> {
 
     VectorType resultType = createMaskOp.getVectorType();
     SmallVector<int64_t> originalSize = *createMaskOp.getShapeForUnroll();
+    // InsertStridedSlice and per-operand indexing require matching ranks.
+    // computeShapeRatio allows a shorter target as a trailing suffix, which
+    // would OOB on (*targetShape)[i] / produce inconsistent strides.
+    if (originalSize.size() != targetShape->size())
+      return rewriter.notifyMatchFailure(
+          createMaskOp,
+          "expected create_mask unroll shape rank to match target shape rank");
+
     Location loc = createMaskOp.getLoc();
 
     Value result = arith::ConstantOp::create(rewriter, loc, resultType,
@@ -1164,6 +1172,11 @@ struct UnrollConstantMaskPattern
 
     VectorType resultType = constantMaskOp.getVectorType();
     SmallVector<int64_t> originalSize = *constantMaskOp.getShapeForUnroll();
+    if (originalSize.size() != targetShape->size())
+      return rewriter.notifyMatchFailure(
+          constantMaskOp, "expected constant_mask unroll shape rank to match "
+                          "target shape rank");
+
     Location loc = constantMaskOp.getLoc();
 
     Value result = arith::ConstantOp::create(rewriter, loc, resultType,
