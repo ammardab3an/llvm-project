@@ -77,6 +77,12 @@ static ExpArity getExpArity(TensorExp::Kind k) {
   case TensorExp::Kind::kShrS:
   case TensorExp::Kind::kShrU:
   case TensorExp::Kind::kShlI:
+  case TensorExp::Kind::kMinSI:
+  case TensorExp::Kind::kMinUI:
+  case TensorExp::Kind::kMaxSI:
+  case TensorExp::Kind::kMaxUI:
+  case TensorExp::Kind::kMinimumF:
+  case TensorExp::Kind::kMaximumF:
   case TensorExp::Kind::kMulF:
   case TensorExp::Kind::kMulC:
   case TensorExp::Kind::kMulI:
@@ -196,6 +202,12 @@ TensorExp::TensorExp(TensorExp::Kind k, unsigned x, ExprId y, Value v,
   case TensorExp::Kind::kShrS:
   case TensorExp::Kind::kShrU:
   case TensorExp::Kind::kShlI:
+  case TensorExp::Kind::kMinSI:
+  case TensorExp::Kind::kMinUI:
+  case TensorExp::Kind::kMaxSI:
+  case TensorExp::Kind::kMaxUI:
+  case TensorExp::Kind::kMinimumF:
+  case TensorExp::Kind::kMaximumF:
     assert(x != detail::kInvalidId && y != detail::kInvalidId && !v && !o);
     children.e0 = x;
     children.e1 = y;
@@ -354,8 +366,12 @@ LatSetId Merger::disjSet(ExprId e, LatSetId s0, LatSetId s1, Operation *op) {
 }
 
 LatSetId Merger::disjSetWithZero(ExprId e, LatSetId s0, LatSetId s1) {
-  assert(exp(e).kind == TensorExp::Kind::kCmpI ||
-         exp(e).kind == TensorExp::Kind::kCmpF);
+  TensorExp::Kind kind = exp(e).kind;
+  assert(kind == TensorExp::Kind::kCmpI || kind == TensorExp::Kind::kCmpF ||
+         kind == TensorExp::Kind::kMinSI || kind == TensorExp::Kind::kMinUI ||
+         kind == TensorExp::Kind::kMaxSI || kind == TensorExp::Kind::kMaxUI ||
+         kind == TensorExp::Kind::kMinimumF ||
+         kind == TensorExp::Kind::kMaximumF);
   const LatSetId sNew = conjSet(e, s0, s1, nullptr);
 
   ExprId e0 = exp(e).children.e0;
@@ -414,7 +430,7 @@ LatSetId Merger::mapSet(TensorExp::Kind kind, LatSetId s0, Value v,
 LatSetId Merger::mapBinWithSynZeroSet(ExprId e, LatSetId s0, bool lhsZero) {
   TensorExp::Kind kind = exp(e).kind;
   Attribute a = exp(e).attr;
-  assert(TensorExp::Kind::kMulF <= kind && kind <= TensorExp::Kind::kShlI);
+  assert(TensorExp::Kind::kMulF <= kind && kind <= TensorExp::Kind::kMaximumF);
   // Must be a binary operation.
   const LatSetId sNew = addSet();
   auto &setNew = latSets[sNew];
@@ -658,6 +674,12 @@ bool Merger::isSingleCondition(TensorId t, ExprId e) const {
   case TensorExp::Kind::kXorI:
   case TensorExp::Kind::kCmpF:
   case TensorExp::Kind::kCmpI:
+  case TensorExp::Kind::kMinSI:
+  case TensorExp::Kind::kMinUI:
+  case TensorExp::Kind::kMaxSI:
+  case TensorExp::Kind::kMaxUI:
+  case TensorExp::Kind::kMinimumF:
+  case TensorExp::Kind::kMaximumF:
   case TensorExp::Kind::kBinary:
     return false;
   case TensorExp::Kind::kDenseOp:
@@ -783,6 +805,14 @@ static const char *kindToOpSymbol(TensorExp::Kind kind) {
     return ">>";
   case TensorExp::Kind::kShlI:
     return "<<";
+  case TensorExp::Kind::kMinSI:
+  case TensorExp::Kind::kMinUI:
+  case TensorExp::Kind::kMinimumF:
+    return "min";
+  case TensorExp::Kind::kMaxSI:
+  case TensorExp::Kind::kMaxUI:
+  case TensorExp::Kind::kMaximumF:
+    return "max";
   case TensorExp::Kind::kCmpF:
   case TensorExp::Kind::kCmpI:
     return "cmp";
@@ -875,6 +905,12 @@ void Merger::dumpExp(ExprId e) const {
   case TensorExp::Kind::kShrS:
   case TensorExp::Kind::kShrU:
   case TensorExp::Kind::kShlI:
+  case TensorExp::Kind::kMinSI:
+  case TensorExp::Kind::kMinUI:
+  case TensorExp::Kind::kMaxSI:
+  case TensorExp::Kind::kMaxUI:
+  case TensorExp::Kind::kMinimumF:
+  case TensorExp::Kind::kMaximumF:
   case TensorExp::Kind::kCmpF:
   case TensorExp::Kind::kCmpI:
   case TensorExp::Kind::kBinary:
@@ -1106,13 +1142,19 @@ LatSetId Merger::buildLattices(ExprId e, LoopId i) {
     }
   case TensorExp::Kind::kCmpF:
   case TensorExp::Kind::kCmpI:
-    // A comparison operation needs to be performed
-    // for the disjunction of sparse iteration spaces.
+  case TensorExp::Kind::kMinSI:
+  case TensorExp::Kind::kMinUI:
+  case TensorExp::Kind::kMaxSI:
+  case TensorExp::Kind::kMaxUI:
+  case TensorExp::Kind::kMinimumF:
+  case TensorExp::Kind::kMaximumF:
+    // A comparison or min/max needs to be performed for the disjunction of
+    // sparse iteration spaces, substituting implicit zeros on absent sides.
     //
-    //   x < y |  !y   |   y   |
-    //  -------+-------+-------+
-    //     !x  |   0   | 0 < y |
-    //      x  | x < 0 | x < y |
+    //   min(x,y)|  !y     |   y      |
+    //  ---------+---------+----------+
+    //     !x    |   0     | min(0,y) |
+    //      x    | min(x,0)| min(x,y) |
     {
       const ExprId e0 = expr.children.e0;
       const ExprId e1 = expr.children.e1;
@@ -1444,6 +1486,18 @@ Merger::buildTensorExp(linalg::GenericOp op, Value v) {
         return {addExp(TensorExp::Kind::kShrU, e0, e1), conjSpVals};
       if (isa<arith::ShLIOp>(def) && isInvariant(e1))
         return {addExp(TensorExp::Kind::kShlI, e0, e1), conjSpVals};
+      if (isa<arith::MinSIOp>(def))
+        return {addExp(TensorExp::Kind::kMinSI, e0, e1), disjSpVals};
+      if (isa<arith::MinUIOp>(def))
+        return {addExp(TensorExp::Kind::kMinUI, e0, e1), disjSpVals};
+      if (isa<arith::MaxSIOp>(def))
+        return {addExp(TensorExp::Kind::kMaxSI, e0, e1), disjSpVals};
+      if (isa<arith::MaxUIOp>(def))
+        return {addExp(TensorExp::Kind::kMaxUI, e0, e1), disjSpVals};
+      if (isa<arith::MinimumFOp>(def))
+        return {addExp(TensorExp::Kind::kMinimumF, e0, e1), disjSpVals};
+      if (isa<arith::MaximumFOp>(def))
+        return {addExp(TensorExp::Kind::kMaximumF, e0, e1), disjSpVals};
       if (auto ci = dyn_cast<arith::CmpIOp>(def)) {
         if (ci.getPredicate() == arith::CmpIPredicate::eq &&
             ci.getPredicate() == arith::CmpIPredicate::sle &&
@@ -1743,6 +1797,18 @@ Value Merger::buildExp(RewriterBase &rewriter, Location loc, ExprId e, Value v0,
     return arith::ShRUIOp::create(rewriter, loc, v0, v1);
   case TensorExp::Kind::kShlI:
     return arith::ShLIOp::create(rewriter, loc, v0, v1);
+  case TensorExp::Kind::kMinSI:
+    return arith::MinSIOp::create(rewriter, loc, v0, v1);
+  case TensorExp::Kind::kMinUI:
+    return arith::MinUIOp::create(rewriter, loc, v0, v1);
+  case TensorExp::Kind::kMaxSI:
+    return arith::MaxSIOp::create(rewriter, loc, v0, v1);
+  case TensorExp::Kind::kMaxUI:
+    return arith::MaxUIOp::create(rewriter, loc, v0, v1);
+  case TensorExp::Kind::kMinimumF:
+    return arith::MinimumFOp::create(rewriter, loc, v0, v1);
+  case TensorExp::Kind::kMaximumF:
+    return arith::MaximumFOp::create(rewriter, loc, v0, v1);
   case TensorExp::Kind::kCmpI: {
     auto predicate = llvm::cast<arith::CmpIPredicateAttr>(expr.attr);
     return arith::CmpIOp::create(rewriter, loc, predicate, v0, v1);
