@@ -2073,12 +2073,23 @@ static LogicalResult verifyTensorReshapeOp(TensorReshapeOp op,
     return failure();
 
   // Reshape must preserve the number of elements when statically known.
+  // Use tryGetNumElements so overflow becomes a controlled diagnostic instead
+  // of an assert. Regression: llvm/llvm-project#221590
   if (expandedType.hasStaticShape() && collapsedType.hasStaticShape()) {
-    int64_t expandedNumElements = expandedType.getNumElements();
-    int64_t collapsedNumElements = collapsedType.getNumElements();
-    if (expandedNumElements != collapsedNumElements) {
+    std::optional<int64_t> expandedNumElements =
+        ShapedType::tryGetNumElements(expandedType.getShape());
+    std::optional<int64_t> collapsedNumElements =
+        ShapedType::tryGetNumElements(collapsedType.getShape());
+    if (!expandedNumElements || !collapsedNumElements) {
+      // Identical shapes preserve element count even when the product does not
+      // fit in int64. Differing shapes cannot be checked safely — reject.
+      if (expandedType.getShape() != collapsedType.getShape()) {
+        return op.emitOpError(
+            "number of elements cannot be compared due to integer overflow");
+      }
+    } else if (*expandedNumElements != *collapsedNumElements) {
       return op.emitOpError("number of elements must be preserved: ")
-             << expandedNumElements << " != " << collapsedNumElements;
+             << *expandedNumElements << " != " << *collapsedNumElements;
     }
   }
 
