@@ -1752,3 +1752,24 @@ func.func @no_crash_dim_of_ambiguous_subview(
   %dim = memref.dim %subview, %c1 : memref<1x?xf32, strided<[?, ?], offset: ?>>
   return %dim : index
 }
+
+// -----
+
+// Do not fold index constants that equal ShapedType::kDynamic into static
+// offset/size/stride attrs (that sentinel needs a matching dynamic operand).
+// Regression for https://github.com/llvm/llvm-project/issues/223336
+// CHECK-LABEL: func @subview_no_fold_kdynamic_constant
+func.func @subview_no_fold_kdynamic_constant(
+    %arg0: memref<8x16x4xf32, strided<[64, 4, 1]>>)
+    -> memref<?x?x?xf32, strided<[?, ?, ?], offset: ?>> {
+  %large = arith.constant 9223372036854775807 : i64
+  %idx = arith.index_cast %large : i64 to index
+  %c1 = arith.constant 1 : index
+  %r = arith.addi %idx, %c1 : index
+  // CHECK: %[[KDYN:.*]] = arith.constant -9223372036854775808 : index
+  // CHECK: memref.subview %{{.*}}[%[[KDYN]], %[[KDYN]], %[[KDYN]]]
+  %sv = memref.subview %arg0[%r, %r, %r] [%idx, %r, %c1] [%r, %r, %r]
+      : memref<8x16x4xf32, strided<[64, 4, 1]>>
+        to memref<?x?x?xf32, strided<[?, ?, ?], offset: ?>>
+  return %sv : memref<?x?x?xf32, strided<[?, ?, ?], offset: ?>>
+}
