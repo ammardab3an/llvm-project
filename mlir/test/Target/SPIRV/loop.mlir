@@ -340,3 +340,77 @@ spirv.module Logical GLSL450 requires #spirv.vce<v1.0, [Shader, Linkage], []> {
     spirv.Return
   }
 }
+
+// -----
+
+// Regression llvm/llvm-project#218853: sibling inner loops with different
+// LoopControl must keep their own control after serialize/deserialize.
+// Previously MapVector erase invalidated the iterator and the first loop
+// inherited the second loop's Unroll control.
+spirv.module Logical GLSL450 requires #spirv.vce<v1.0, [Shader], []> {
+  // CHECK-LABEL: @sibling_inner_loop_controls
+  spirv.func @sibling_inner_loop_controls() -> () "None" {
+    %count = spirv.Constant 4 : i32
+    %zero = spirv.Constant 0 : i32
+    %one = spirv.Constant 1 : i32
+    %ivar = spirv.Variable init(%zero) : !spirv.ptr<i32, Function>
+    %jvar = spirv.Variable init(%zero) : !spirv.ptr<i32, Function>
+    %kvar = spirv.Variable init(%zero) : !spirv.ptr<i32, Function>
+    // CHECK: spirv.mlir.loop {
+    spirv.mlir.loop {
+      spirv.Branch ^outer_header
+    ^outer_header:
+      %ival0 = spirv.Load "Function" %ivar : i32
+      %icmp = spirv.SLessThan %ival0, %count : i32
+      spirv.BranchConditional %icmp, ^outer_body, ^outer_merge
+    ^outer_body:
+      spirv.Store "Function" %jvar, %zero : i32
+      // CHECK: spirv.mlir.loop control(DontUnroll)
+      spirv.mlir.loop control(DontUnroll) {
+        spirv.Branch ^inner1_header
+      ^inner1_header:
+        %jval0 = spirv.Load "Function" %jvar : i32
+        %jcmp = spirv.SLessThan %jval0, %count : i32
+        spirv.BranchConditional %jcmp, ^inner1_body, ^inner1_merge
+      ^inner1_body:
+        spirv.Branch ^inner1_continue
+      ^inner1_continue:
+        %jval1 = spirv.Load "Function" %jvar : i32
+        %jadd = spirv.IAdd %jval1, %one : i32
+        spirv.Store "Function" %jvar, %jadd : i32
+        spirv.Branch ^inner1_header
+      ^inner1_merge:
+        spirv.mlir.merge
+      }
+      spirv.Store "Function" %kvar, %zero : i32
+      // CHECK: spirv.mlir.loop control(Unroll)
+      spirv.mlir.loop control(Unroll) {
+        spirv.Branch ^inner2_header
+      ^inner2_header:
+        %kval0 = spirv.Load "Function" %kvar : i32
+        %kcmp = spirv.SLessThan %kval0, %count : i32
+        spirv.BranchConditional %kcmp, ^inner2_body, ^inner2_merge
+      ^inner2_body:
+        spirv.Branch ^inner2_continue
+      ^inner2_continue:
+        %kval1 = spirv.Load "Function" %kvar : i32
+        %kadd = spirv.IAdd %kval1, %one : i32
+        spirv.Store "Function" %kvar, %kadd : i32
+        spirv.Branch ^inner2_header
+      ^inner2_merge:
+        spirv.mlir.merge
+      }
+      spirv.Branch ^outer_continue
+    ^outer_continue:
+      %ival1 = spirv.Load "Function" %ivar : i32
+      %iadd = spirv.IAdd %ival1, %one : i32
+      spirv.Store "Function" %ivar, %iadd : i32
+      spirv.Branch ^outer_header
+    ^outer_merge:
+      spirv.mlir.merge
+    }
+    spirv.Return
+  }
+  spirv.EntryPoint "GLCompute" @sibling_inner_loop_controls
+  spirv.ExecutionMode @sibling_inner_loop_controls "LocalSize", 1, 1, 1
+}
