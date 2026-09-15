@@ -2693,6 +2693,13 @@ LogicalResult OperationLegalizer::legalizeWithFold(Operation *op) {
                             "failed to legalize generated constant '{0}'",
                             newOp->getName()));
       if (!rewriter.getConfig().allowPatternRollback) {
+        // Without rollback we cannot undo the fold. Folder-produced ops that
+        // are not explicitly illegal (typical for unknown ops during partial
+        // conversion) may remain unconverted — same as the input op. Only
+        // fatal if we produced an illegal op that could not be legalized.
+        // Regression: llvm/llvm-project#222543
+        if (!isIllegal(newOp))
+          continue;
         // Rolling back a folder is like rolling back a pattern.
         llvm::reportFatalInternalError(
             "op '" + opName +
