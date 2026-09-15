@@ -1315,6 +1315,16 @@ struct ConvertVectorTransferRead final
     int emulatedBits = emulatedElemTy.getIntOrFloatBitWidth();
     int containerBits = containerElemTy.getIntOrFloatBitWidth();
 
+    // This pattern packs sub-byte elements (e.g., i4, f4E2M1FN) into a wider
+    // multi-byte container. If the emulated element type is not sub-byte
+    // (e.g., f16, i8), the type converter may still have widened the memref
+    // element type, but this pattern cannot handle it. Bail out gracefully
+    // instead of asserting inside `fitsInMultiByteContainerTy`.
+    if (emulatedBits >= 8) {
+      return rewriter.notifyMatchFailure(
+          op, "only sub-byte element types (< 8 bits) are supported");
+    }
+
     // Check per-element alignment.
     if (containerBits % emulatedBits != 0) {
       return rewriter.notifyMatchFailure(
