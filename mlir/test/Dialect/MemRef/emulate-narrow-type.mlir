@@ -712,3 +712,23 @@ func.func @alloc_non_contiguous() {
 func.func @argument_non_contiguous(%arg0 : memref<8x8xi4, strided<[1, 8]>>) {
   return
 }
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/206625
+// Memrefs of vector elements are not packed-integer emulation; do not query
+// int/float bitwidth on the vector type.
+func.func @load_scalable_vector_memref() {
+  %alloca = memref.alloca() : memref<vector<[2]x2xi1>>
+  %0 = memref.load %alloca[] : memref<vector<[2]x2xi1>>
+  memref.store %0, %alloca[] : memref<vector<[2]x2xi1>>
+  return
+}
+// CHECK-LABEL: func @load_scalable_vector_memref
+//       CHECK:   %[[ALLOCA:.+]] = memref.alloca() : memref<vector<[2]x2xi1>>
+//       CHECK:   %[[LOAD:.+]] = memref.load %[[ALLOCA]][] : memref<vector<[2]x2xi1>>
+//       CHECK:   memref.store %[[LOAD]], %[[ALLOCA]][] : memref<vector<[2]x2xi1>>
+// CHECK32-LABEL: func @load_scalable_vector_memref
+//       CHECK32:   %[[ALLOCA:.+]] = memref.alloca() : memref<vector<[2]x2xi1>>
+//       CHECK32:   %[[LOAD:.+]] = memref.load %[[ALLOCA]][] : memref<vector<[2]x2xi1>>
+//       CHECK32:   memref.store %[[LOAD]], %[[ALLOCA]][] : memref<vector<[2]x2xi1>>

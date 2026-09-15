@@ -27,6 +27,15 @@
 
 using namespace mlir;
 
+namespace {
+/// If `ty` is int or float, return its bitwidth. Otherwise nullopt.
+std::optional<unsigned> getIntOrFloatWidth(Type ty) {
+  if (!ty.isIntOrFloat())
+    return std::nullopt;
+  return ty.getIntOrFloatBitWidth();
+}
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Utility functions
 //===----------------------------------------------------------------------===//
@@ -50,8 +59,14 @@ convertCastingOp(ConversionPatternRewriter &rewriter,
 
   Type convertedElementType = newTy.getElementType();
   Type oldElementType = op.getType().getElementType();
-  int srcBits = oldElementType.getIntOrFloatBitWidth();
-  int dstBits = convertedElementType.getIntOrFloatBitWidth();
+  std::optional<unsigned> srcBitsOpt = getIntOrFloatWidth(oldElementType);
+  std::optional<unsigned> dstBitsOpt = getIntOrFloatWidth(convertedElementType);
+  if (!srcBitsOpt || !dstBitsOpt) {
+    return rewriter.notifyMatchFailure(
+        op, "expected int/float source and converted element types");
+  }
+  int srcBits = *srcBitsOpt;
+  int dstBits = *dstBitsOpt;
   if (dstBits % srcBits != 0) {
     return rewriter.notifyMatchFailure(op,
                                        "only dstBits % srcBits == 0 supported");
@@ -233,14 +248,21 @@ struct ConvertMemRefAllocation final : OpConversionPattern<OpTy> {
     Location loc = op.getLoc();
     OpFoldResult zero = rewriter.getIndexAttr(0);
 
+    std::optional<unsigned> srcBits =
+        getIntOrFloatWidth(currentType.getElementType());
+    std::optional<unsigned> dstBits =
+        getIntOrFloatWidth(newResultType.getElementType());
+    if (!srcBits || !dstBits) {
+      return rewriter.notifyMatchFailure(
+          op, "expected int/float source and converted element types");
+    }
+
     // Get linearized type.
-    int srcBits = currentType.getElementType().getIntOrFloatBitWidth();
-    int dstBits = newResultType.getElementType().getIntOrFloatBitWidth();
     SmallVector<OpFoldResult> sizes = op.getMixedSizes();
 
     memref::LinearizedMemRefInfo linearizedMemRefInfo =
         memref::getLinearizedMemRefOffsetAndSize(
-            rewriter, loc, srcBits, dstBits, /*offset =*/zero, sizes);
+            rewriter, loc, *srcBits, *dstBits, /*offset =*/zero, sizes);
     SmallVector<Value> dynamicLinearizedSize;
     if (!newResultType.hasStaticShape()) {
       dynamicLinearizedSize.push_back(getValueOrCreateConstantIndexOp(
@@ -331,8 +353,15 @@ struct ConvertMemRefLoad final : OpConversionPattern<memref::LoadOp> {
     auto convertedType = cast<MemRefType>(adaptor.getMemref().getType());
     auto convertedElementType = convertedType.getElementType();
     auto oldElementType = op.getMemRefType().getElementType();
-    int srcBits = oldElementType.getIntOrFloatBitWidth();
-    int dstBits = convertedElementType.getIntOrFloatBitWidth();
+    std::optional<unsigned> srcBitsOpt = getIntOrFloatWidth(oldElementType);
+    std::optional<unsigned> dstBitsOpt =
+        getIntOrFloatWidth(convertedElementType);
+    if (!srcBitsOpt || !dstBitsOpt) {
+      return rewriter.notifyMatchFailure(
+          op, "expected int/float source and converted element types");
+    }
+    int srcBits = *srcBitsOpt;
+    int dstBits = *dstBitsOpt;
     if (dstBits % srcBits != 0) {
       return rewriter.notifyMatchFailure(
           op, "only dstBits % srcBits == 0 supported");
@@ -495,8 +524,17 @@ struct ConvertMemrefStore final : OpConversionPattern<memref::StoreOp> {
   matchAndRewrite(memref::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto convertedType = cast<MemRefType>(adaptor.getMemref().getType());
-    int srcBits = op.getMemRefType().getElementTypeBitWidth();
-    int dstBits = convertedType.getElementTypeBitWidth();
+    Type oldElementType = op.getMemRefType().getElementType();
+    Type convertedElementType = convertedType.getElementType();
+    std::optional<unsigned> srcBitsOpt = getIntOrFloatWidth(oldElementType);
+    std::optional<unsigned> dstBitsOpt =
+        getIntOrFloatWidth(convertedElementType);
+    if (!srcBitsOpt || !dstBitsOpt) {
+      return rewriter.notifyMatchFailure(
+          op, "expected int/float source and converted element types");
+    }
+    int srcBits = *srcBitsOpt;
+    int dstBits = *dstBitsOpt;
     auto dstIntegerType = rewriter.getIntegerType(dstBits);
     if (dstBits % srcBits != 0) {
       return rewriter.notifyMatchFailure(
@@ -601,8 +639,15 @@ struct ConvertMemRefSubview final : OpConversionPattern<memref::SubViewOp> {
     Location loc = subViewOp.getLoc();
     Type convertedElementType = newTy.getElementType();
     Type oldElementType = subViewOp.getType().getElementType();
-    int srcBits = oldElementType.getIntOrFloatBitWidth();
-    int dstBits = convertedElementType.getIntOrFloatBitWidth();
+    std::optional<unsigned> srcBitsOpt = getIntOrFloatWidth(oldElementType);
+    std::optional<unsigned> dstBitsOpt =
+        getIntOrFloatWidth(convertedElementType);
+    if (!srcBitsOpt || !dstBitsOpt) {
+      return rewriter.notifyMatchFailure(
+          subViewOp, "expected int/float source and converted element types");
+    }
+    int srcBits = *srcBitsOpt;
+    int dstBits = *dstBitsOpt;
     if (dstBits % srcBits != 0)
       return rewriter.notifyMatchFailure(
           subViewOp, "only dstBits % srcBits == 0 supported");
