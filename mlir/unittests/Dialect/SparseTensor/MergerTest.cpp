@@ -36,7 +36,13 @@ namespace {
   DO(xori, TensorExp::Kind::kXorI)                                             \
   DO(ori, TensorExp::Kind::kOrI)                                               \
   DO(cmpf, TensorExp::Kind::kCmpF)                                             \
-  DO(cmpi, TensorExp::Kind::kCmpI)
+  DO(cmpi, TensorExp::Kind::kCmpI)                                             \
+  DO(minsi, TensorExp::Kind::kMinSI)                                           \
+  DO(minui, TensorExp::Kind::kMinUI)                                           \
+  DO(maxsi, TensorExp::Kind::kMaxSI)                                           \
+  DO(maxui, TensorExp::Kind::kMaxUI)                                           \
+  DO(minf, TensorExp::Kind::kMinimumF)                                         \
+  DO(maxf, TensorExp::Kind::kMaximumF)
 
 #define FOREVERY_COMMON_DISJ_BINOP_EXTRA(TEST, EXTRA)                          \
   TEST(addf, EXTRA)                                                            \
@@ -282,6 +288,12 @@ protected:
     case TensorExp::Kind::kShrS:
     case TensorExp::Kind::kShrU:
     case TensorExp::Kind::kShlI:
+    case TensorExp::Kind::kMinSI:
+    case TensorExp::Kind::kMinUI:
+    case TensorExp::Kind::kMaxSI:
+    case TensorExp::Kind::kMaxUI:
+    case TensorExp::Kind::kMinimumF:
+    case TensorExp::Kind::kMaximumF:
     case TensorExp::Kind::kBinary:
     case TensorExp::Kind::kReduce:
       return compareExpression(tensorExp.children.e0, pattern.children.e0) &&

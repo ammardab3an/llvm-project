@@ -190,6 +190,12 @@ enum class TensorExp::Kind {
   kShrS, // signed
   kShrU, // unsigned
   kShlI,
+  kMinSI,
+  kMinUI,
+  kMaxSI,
+  kMaxUI,
+  kMinimumF,
+  kMaximumF,
   kBinary,  // semiring binary op
   kReduce,  // semiring reduction op
   kDenseOp, // special category of operations requiring all dense operands
