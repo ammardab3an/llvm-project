@@ -2823,8 +2823,25 @@ LogicalResult OperationLegalizer::legalizeWithPattern(Operation *op) {
         legalizePatternResult(op, pattern, curState, newOps, modifiedOps);
     appliedPatterns.erase(&pattern);
     if (failed(result)) {
-      if (!rewriterImpl.config.allowPatternRollback)
+      if (!rewriterImpl.config.allowPatternRollback) {
+        // Without rollback we cannot undo. Patterns may modify ops that are
+        // neither legal nor illegal (unknown during partial conversion). If
+        // nothing produced/modified is explicitly illegal, keep the IR —
+        // same policy as legalizeWithFold. Regression: #222539
+        auto keepsUnknown = [&](Operation *produced) {
+          return !isIllegal(produced);
+        };
+        if (llvm::all_of(newOps, keepsUnknown) &&
+            llvm::all_of(modifiedOps, keepsUnknown)) {
+          LLVM_DEBUG(logSuccess(
+              rewriterImpl.logger,
+              "kept pattern result; produced/modified ops are not illegal"));
+          if (config.listener)
+            config.listener->notifyPatternEnd(pattern, success());
+          return success();
+        }
         reportNewIrLegalizationFatalError(pattern, newOps, modifiedOps);
+      }
       rewriterImpl.resetState(curState, pattern.getDebugName());
     }
     if (config.listener)
