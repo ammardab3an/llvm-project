@@ -1965,8 +1965,23 @@ static LogicalResult generateCopy(
   // explicit copying.
   bool isCopyOutAtEndOfBlock = (end == copyOutPlacementStart);
 
-  // Copies for read regions are going to be inserted at 'begin'.
-  OpBuilder prologue(copyPlacementBlock, copyInPlacementStart);
+  auto loc = region.loc;
+  auto memref = region.memref;
+  auto memRefType = cast<MemRefType>(memref.getType());
+
+  // Copies for read regions are going to be inserted at 'begin', but never
+  // before the memref SSA definition in the same block (otherwise the copy
+  // load does not dominate). Regression: llvm/llvm-project#216630
+  Block::iterator copyInStart = copyInPlacementStart;
+  if (!region.isWrite()) {
+    if (Operation *def = memref.getDefiningOp()) {
+      if (def->getBlock() == copyPlacementBlock &&
+          (copyInStart == copyPlacementBlock->end() ||
+           !def->isBeforeInBlock(&*copyInStart)))
+        copyInStart = std::next(def->getIterator());
+    }
+  }
+  OpBuilder prologue(copyPlacementBlock, copyInStart);
   // Copies for write regions are going to be inserted at 'end'.
   OpBuilder epilogue(copyPlacementBlock, copyOutPlacementStart);
   OpBuilder &b = region.isWrite() ? epilogue : prologue;
@@ -1975,10 +1990,6 @@ static LogicalResult generateCopy(
   auto func =
       copyPlacementBlock->getParent()->getParentOfType<FunctionOpInterface>();
   OpBuilder top(func.getFunctionBody());
-
-  auto loc = region.loc;
-  auto memref = region.memref;
-  auto memRefType = cast<MemRefType>(memref.getType());
 
   if (!memRefType.getLayout().isIdentity()) {
     LDBG() << "Non-identity layout map not yet supported";
@@ -2233,7 +2244,12 @@ static LogicalResult generateCopy(
 
   auto userFilterFn = [&](Operation *user) {
     auto *ancestorUser = block->findAncestorOpInBlock(*user);
-    return ancestorUser && !ancestorUser->isBeforeInBlock(&*begin) &&
+    if (!ancestorUser)
+      return false;
+    // Copy nests load the original memref; do not rewrite those uses.
+    if (copyNests.count(ancestorUser))
+      return false;
+    return !ancestorUser->isBeforeInBlock(&*begin) &&
            !lastCopyOp->isBeforeInBlock(ancestorUser);
   };
 
