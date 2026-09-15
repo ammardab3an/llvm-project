@@ -1102,6 +1102,23 @@ static Value createMask(AffineForOp vecForOp, VectorizationState &state) {
   return mask;
 }
 
+/// Returns the remainder mask of an enclosing vectorized loop, if any. Used to
+/// suppress garbage lanes in the last iteration when the trip count is not a
+/// multiple of the vector width. Reduction loops already apply this mask to
+/// the yielded combiner operand, so they are skipped here.
+static Value getEnclosingVectorMask(VectorizationState &state) {
+  Operation *parent = state.builder.getInsertionBlock()->getParentOp();
+  while (parent) {
+    if (auto forOp = dyn_cast<AffineForOp>(parent)) {
+      if (forOp.getNumIterOperands() == 0)
+        if (Value mask = state.vecLoopToMask.lookup(parent))
+          return mask;
+    }
+    parent = parent->getParentOp();
+  }
+  return nullptr;
+}
+
 /// Returns true if the provided value is vector uniform given the vectorization
 /// strategy.
 // TODO: For now, only values that are induction variables of loops not in
@@ -1270,6 +1287,10 @@ static Operation *vectorizeAffineLoad(AffineLoadOp loadOp,
       /*padValue=*/std::nullopt, /*useInBoundsInsteadOfMasking=*/true, indices,
       permutationMap);
   Operation *transfer = transferVal.getDefiningOp();
+  if (Value mask = getEnclosingVectorMask(state)) {
+    transfer = vector::maskOperation(state.builder, transfer, mask);
+    transferVal = transfer->getResult(0);
+  }
 
   // Register replacement for future uses in the scope.
   state.registerOpVectorReplacement(loadOp, transfer);
@@ -1327,6 +1348,8 @@ static Operation *vectorizeAffineStore(AffineStoreOp storeOp,
       state.builder, storeOp.getLoc(), vectorValue, storeOp.getMemRef(),
       SmallVector<Value>(indices.begin(), indices.end()),
       /*useInBoundsInsteadOfMasking=*/true, permutationMap);
+  if (Value mask = getEnclosingVectorMask(state))
+    transfer = vector::maskOperation(state.builder, transfer, mask);
   LLVM_DEBUG(dbgs() << "\n[early-vect]+++++ vectorized store: " << *transfer);
 
   // Register replacement for future uses in the scope.
@@ -1472,10 +1495,23 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp,
   // inserted into the vectorized loop's body.
   state.builder.setInsertionPointToStart(vecForOp.getBody());
 
-  // If this is a reduction loop then we may need to create a mask to filter out
-  // garbage in the last iteration.
-  if (isLoopVecDim && forOp.getNumIterOperands() > 0)
-    createMask(vecForOp, state);
+  // If this is a vectorized dimension, create a remainder mask when the last
+  // vector iteration would otherwise run extra scalar iterations. Reductions
+  // already need this for any (including dynamic) trip count. Non-reduction
+  // loops need it when a static trip count is not a multiple of the vector
+  // width; otherwise stores would write past the original iteration space
+  // (see llvm/llvm-project#218120). n-D masking is not supported yet.
+  if (isLoopVecDim && strategy.vectorSizes.size() == 1 &&
+      forOp.getStep() == 1) {
+    bool needsRemainderMask = forOp.getNumIterOperands() > 0;
+    if (!needsRemainderMask && forOp.hasConstantBounds()) {
+      int64_t tripCount =
+          forOp.getConstantUpperBound() - forOp.getConstantLowerBound();
+      needsRemainderMask = tripCount % strategy.vectorSizes[0] != 0;
+    }
+    if (needsRemainderMask)
+      createMask(vecForOp, state);
+  }
 
   return vecForOp;
 }
