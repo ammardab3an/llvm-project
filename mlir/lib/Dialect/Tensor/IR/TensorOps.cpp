@@ -2092,6 +2092,12 @@ static LogicalResult verifyTensorReshapeOp(TensorReshapeOp op,
 }
 
 LogicalResult ExpandShapeOp::verify() {
+  ExpandShapeOp op = *this;
+  if (llvm::any_of(op.getReassociationIndices(),
+                   [](ReassociationIndices group) { return group.empty(); })) {
+    return op.emitOpError("reassociation indices must not be empty");
+  }
+
   RankedTensorType srcType = getSrc().getType();
   RankedTensorType resultType = getResult().getType();
 
