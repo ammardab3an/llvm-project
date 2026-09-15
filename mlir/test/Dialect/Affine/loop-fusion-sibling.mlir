@@ -21,3 +21,23 @@ func.func @disjoint_stores(%0: memref<8xf32>) {
   // CHECK-NOT: affine.for
   return
 }
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/216464
+// Sibling fusion must not erase a nest whose results are still live.
+// CHECK-LABEL: func @sibling_fusion_preserves_live_iter_args
+func.func @sibling_fusion_preserves_live_iter_args(%m: memref<4xi32>, %n: memref<4xi32>, %init: i32) -> i32 {
+  // CHECK: %[[R:.*]] = affine.for {{.*}} iter_args
+  %a = affine.for %i = 0 to 4 iter_args(%x = %init) -> (i32) {
+    %v = affine.load %m[%i] : memref<4xi32>
+    %t = arith.addi %x, %v : i32
+    affine.yield %t : i32
+  }
+  affine.for %i = 0 to 4 {
+    %v = affine.load %m[%i] : memref<4xi32>
+    affine.store %v, %n[%i] : memref<4xi32>
+  }
+  // CHECK: return %[[R]]
+  return %a : i32
+}
