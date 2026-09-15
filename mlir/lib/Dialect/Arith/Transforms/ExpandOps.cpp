@@ -8,7 +8,8 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
-#include "mlir/Dialect/Vector/IR/VectorDialect.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -23,38 +24,75 @@ namespace arith {
 
 using namespace mlir;
 
-/// Create an integer or index constant.
+/// Broadcast a scalar constant to a dynamically-shaped type. Returns a null
+/// Value if the shape cannot be materialized (e.g. unranked tensor without a
+/// ranked `shapeSrc`).
+static Value splatScalarToShapedType(Location loc, ShapedType shapedTy,
+                                     Value scalar, PatternRewriter &rewriter,
+                                     Value shapeSrc) {
+  if (isa<VectorType>(shapedTy)) {
+    if (!rewriter.getContext()->getLoadedDialect<vector::VectorDialect>())
+      return Value();
+    return vector::BroadcastOp::create(rewriter, loc, shapedTy, scalar);
+  }
+  if (!shapedTy.hasRank() || !shapeSrc)
+    return Value();
+  // Tensor ops cannot be created unless the dialect is already loaded (e.g.
+  // via a pass dependentDialects list). Do not load it here: that is illegal
+  // while the pass manager is running.
+  if (!rewriter.getContext()->getLoadedDialect<tensor::TensorDialect>())
+    return Value();
+  SmallVector<Value> dynamicSizes;
+  for (int64_t i = 0, e = shapedTy.getRank(); i < e; ++i) {
+    if (shapedTy.isDynamicDim(i))
+      dynamicSizes.push_back(tensor::DimOp::create(rewriter, loc, shapeSrc, i));
+  }
+  return tensor::SplatOp::create(rewriter, loc, shapedTy, scalar, dynamicSizes);
+}
+
+/// Create an integer or index constant. DenseElementsAttr cannot represent
+/// dynamically-shaped types (llvm/llvm-project#206091); those use splat.
 static Value createConst(Location loc, Type type, int value,
-                         PatternRewriter &rewriter) {
+                         PatternRewriter &rewriter, Value shapeSrc = Value()) {
   auto attr = rewriter.getIntegerAttr(getElementTypeOrSelf(type), value);
-  if (auto shapedTy = dyn_cast<ShapedType>(type)) {
+  auto shapedTy = dyn_cast<ShapedType>(type);
+  if (!shapedTy)
+    return arith::ConstantOp::create(rewriter, loc, attr);
+  if (shapedTy.hasStaticShape())
     return arith::ConstantOp::create(rewriter, loc,
                                      DenseElementsAttr::get(shapedTy, attr));
-  }
-  return arith::ConstantOp::create(rewriter, loc, attr);
+  Value scalar = arith::ConstantOp::create(rewriter, loc, attr);
+  return splatScalarToShapedType(loc, shapedTy, scalar, rewriter, shapeSrc);
 }
 
 /// Create an integer constant from an APInt.
 static Value createAPIntConst(Location loc, Type type, const APInt &value,
-                              PatternRewriter &rewriter) {
+                              PatternRewriter &rewriter,
+                              Value shapeSrc = Value()) {
   auto attr = IntegerAttr::get(getElementTypeOrSelf(type), value);
-  if (auto shapedTy = dyn_cast<ShapedType>(type)) {
+  auto shapedTy = dyn_cast<ShapedType>(type);
+  if (!shapedTy)
+    return arith::ConstantOp::create(rewriter, loc, attr);
+  if (shapedTy.hasStaticShape())
     return arith::ConstantOp::create(rewriter, loc,
                                      DenseElementsAttr::get(shapedTy, attr));
-  }
-  return arith::ConstantOp::create(rewriter, loc, attr);
+  Value scalar = arith::ConstantOp::create(rewriter, loc, attr);
+  return splatScalarToShapedType(loc, shapedTy, scalar, rewriter, shapeSrc);
 }
 
 /// Create a float constant.
 static Value createFloatConst(Location loc, Type type, const APFloat &value,
-                              PatternRewriter &rewriter) {
+                              PatternRewriter &rewriter,
+                              Value shapeSrc = Value()) {
   auto attr = rewriter.getFloatAttr(getElementTypeOrSelf(type), value);
-  if (auto shapedTy = dyn_cast<ShapedType>(type)) {
+  auto shapedTy = dyn_cast<ShapedType>(type);
+  if (!shapedTy)
+    return arith::ConstantOp::create(rewriter, loc, attr);
+  if (shapedTy.hasStaticShape())
     return arith::ConstantOp::create(rewriter, loc,
                                      DenseElementsAttr::get(shapedTy, attr));
-  }
-
-  return arith::ConstantOp::create(rewriter, loc, attr);
+  Value scalar = arith::ConstantOp::create(rewriter, loc, attr);
+  return splatScalarToShapedType(loc, shapedTy, scalar, rewriter, shapeSrc);
 }
 
 /// Creates shapedType using shape from cloneFrom and base type from cloneTo
@@ -76,10 +114,14 @@ struct CeilDivUIOpConverter : public OpRewritePattern<arith::CeilDivUIOp> {
     Location loc = op.getLoc();
     Value a = op.getLhs();
     Value b = op.getRhs();
-    Value zero = createConst(loc, a.getType(), 0, rewriter);
+    Value zero = createConst(loc, a.getType(), 0, rewriter, a);
+    if (!zero)
+      return failure();
     Value compare =
         arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, a, zero);
-    Value one = createConst(loc, a.getType(), 1, rewriter);
+    Value one = createConst(loc, a.getType(), 1, rewriter, a);
+    if (!one)
+      return failure();
     Value minusOne = arith::SubIOp::create(rewriter, loc, a, one);
     Value quotient = arith::DivUIOp::create(rewriter, loc, minusOne, b);
     Value plusOne = arith::AddIOp::create(rewriter, loc, quotient, one);
@@ -104,8 +146,10 @@ struct CeilDivSIOpConverter : public OpRewritePattern<arith::CeilDivSIOp> {
     Value a = op.getLhs();
     Value b = op.getRhs();
 
-    Value zero = createConst(loc, type, 0, rewriter);
-    Value one = createConst(loc, type, 1, rewriter);
+    Value zero = createConst(loc, type, 0, rewriter, a);
+    Value one = createConst(loc, type, 1, rewriter, a);
+    if (!zero || !one)
+      return failure();
 
     Value quotient = arith::DivSIOp::create(rewriter, loc, a, b);
     Value product = arith::MulIOp::create(rewriter, loc, quotient, b);
@@ -150,7 +194,9 @@ struct FloorDivSIOpConverter : public OpRewritePattern<arith::FloorDivSIOp> {
     Value product = arith::MulIOp::create(rewriter, loc, quotient, b);
     Value notEqualDivisor = arith::CmpIOp::create(
         rewriter, loc, arith::CmpIPredicate::ne, a, product);
-    Value zero = createConst(loc, type, 0, rewriter);
+    Value zero = createConst(loc, type, 0, rewriter, a);
+    if (!zero)
+      return failure();
 
     Value aNeg = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
                                        a, zero);
@@ -162,7 +208,9 @@ struct FloorDivSIOpConverter : public OpRewritePattern<arith::FloorDivSIOp> {
     Value cond =
         arith::AndIOp::create(rewriter, loc, notEqualDivisor, signOpposite);
 
-    Value minusOne = createConst(loc, type, -1, rewriter);
+    Value minusOne = createConst(loc, type, -1, rewriter, a);
+    if (!minusOne)
+      return failure();
     Value quotientMinusOne =
         arith::AddIOp::create(rewriter, loc, quotient, minusOne);
 
@@ -1056,10 +1104,12 @@ struct FlushDenormalsOpConverter
         APInt::getBitsSet(totalBits, mantissaBits, mantissaBits + expBits);
     APInt clearMantissaMaskVal = ~APInt::getLowBitsSet(totalBits, mantissaBits);
     APInt zeroVal = APInt::getZero(totalBits);
-    Value expMask = createAPIntConst(loc, intTy, expMaskVal, rewriter);
+    Value expMask = createAPIntConst(loc, intTy, expMaskVal, rewriter, operand);
     Value clearMantissaMask =
-        createAPIntConst(loc, intTy, clearMantissaMaskVal, rewriter);
-    Value zero = createAPIntConst(loc, intTy, zeroVal, rewriter);
+        createAPIntConst(loc, intTy, clearMantissaMaskVal, rewriter, operand);
+    Value zero = createAPIntConst(loc, intTy, zeroVal, rewriter, operand);
+    if (!expMask || !clearMantissaMask || !zero)
+      return failure();
 
     // expField == 0
     Value expField = arith::AndIOp::create(b, bits, expMask);
@@ -1088,6 +1138,7 @@ struct ArithExpandOpsPass
     arith::populateExpandScalingExtTruncPatterns(patterns);
 
     target.addLegalDialect<arith::ArithDialect>();
+    target.addLegalDialect<tensor::TensorDialect>();
     target.addLegalDialect<vector::VectorDialect>();
 
     // clang-format off

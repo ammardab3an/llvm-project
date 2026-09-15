@@ -144,6 +144,28 @@ func.func @ceildivui_index(%arg0: index, %arg1: index) -> (index) {
 
 // -----
 
+// Regression for https://github.com/llvm/llvm-project/issues/206091
+// Dynamic tensor shapes cannot be materialized as DenseElementsAttr.
+// CHECK-LABEL: func @ceildivui_dynamic_tensor
+// CHECK-SAME:    %[[ARG0:.*]]: tensor<8x4x?xi64>
+func.func @ceildivui_dynamic_tensor(%arg0: tensor<8x4x?xi64>) -> tensor<8x4x?xi64> {
+  %res = arith.ceildivui %arg0, %arg0 : tensor<8x4x?xi64>
+  return %res : tensor<8x4x?xi64>
+// CHECK:           %[[C0:.*]] = arith.constant 0 : i64
+// CHECK:           %[[DIM0:.*]] = tensor.dim %[[ARG0]]
+// CHECK:           %[[ZERO:.*]] = tensor.splat %[[C0]][%[[DIM0]]] : tensor<8x4x?xi64>
+// CHECK:           %[[ISZERO:.*]] = arith.cmpi eq, %[[ARG0]], %[[ZERO]]
+// CHECK:           %[[C1:.*]] = arith.constant 1 : i64
+// CHECK:           %[[DIM1:.*]] = tensor.dim %[[ARG0]]
+// CHECK:           %[[ONE:.*]] = tensor.splat %[[C1]][%[[DIM1]]] : tensor<8x4x?xi64>
+// CHECK:           %[[SUB:.*]] = arith.subi %[[ARG0]], %[[ONE]]
+// CHECK:           %[[DIV:.*]] = arith.divui %[[SUB]], %[[ARG0]]
+// CHECK:           %[[REM:.*]] = arith.addi %[[DIV]], %[[ONE]]
+// CHECK:           arith.select %[[ISZERO]], %[[ZERO]], %[[REM]]
+}
+
+// -----
+
 // CHECK-LABEL: func @maximumf
 func.func @maximumf(%a: f32, %b: f32) -> f32 {
   %result = arith.maximumf %a, %b : f32
