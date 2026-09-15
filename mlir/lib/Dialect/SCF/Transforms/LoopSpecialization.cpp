@@ -69,9 +69,24 @@ static void specializeParallelLoopForUnrolling(ParallelOp op) {
     cond = cond ? arith::AndIOp::create(b, op.getLoc(), cond, cmp) : cmp;
     map.map(std::get<0>(bound), constant);
   }
-  auto ifOp = scf::IfOp::create(b, op.getLoc(), cond, /*withElseRegion=*/true);
-  ifOp.getThenBodyBuilder().clone(*op.getOperation(), map);
-  ifOp.getElseBodyBuilder().clone(*op.getOperation());
+  // Create an if that forwards the parallel's results (e.g. reductions).
+  // Cloning alone leaves the original results live; erasing without replacing
+  // uses crashes. Regression: llvm/llvm-project#205231
+  auto ifOp = scf::IfOp::create(b, op.getLoc(), op.getResultTypes(), cond,
+                                /*withElseRegion=*/true);
+  {
+    OpBuilder thenB = ifOp.getThenBodyBuilder();
+    Operation *cloned = thenB.clone(*op.getOperation(), map);
+    if (op.getNumResults())
+      scf::YieldOp::create(thenB, op.getLoc(), cloned->getResults());
+  }
+  {
+    OpBuilder elseB = ifOp.getElseBodyBuilder();
+    Operation *cloned = elseB.clone(*op.getOperation());
+    if (op.getNumResults())
+      scf::YieldOp::create(elseB, op.getLoc(), cloned->getResults());
+  }
+  op.replaceAllUsesWith(ifOp.getResults());
   op.erase();
 }
 
@@ -100,9 +115,23 @@ static void specializeForLoopForUnrolling(ForOp op) {
   Value cond = arith::CmpIOp::create(b, op.getLoc(), arith::CmpIPredicate::eq,
                                      bound, constant);
   map.map(bound, constant);
-  auto ifOp = scf::IfOp::create(b, op.getLoc(), cond, /*withElseRegion=*/true);
-  ifOp.getThenBodyBuilder().clone(*op.getOperation(), map);
-  ifOp.getElseBodyBuilder().clone(*op.getOperation());
+  // Same as parallel specialization: yield/replace results so loops with
+  // iter_args are not erased while still in use.
+  auto ifOp = scf::IfOp::create(b, op.getLoc(), op.getResultTypes(), cond,
+                                /*withElseRegion=*/true);
+  {
+    OpBuilder thenB = ifOp.getThenBodyBuilder();
+    Operation *cloned = thenB.clone(*op.getOperation(), map);
+    if (op.getNumResults())
+      scf::YieldOp::create(thenB, op.getLoc(), cloned->getResults());
+  }
+  {
+    OpBuilder elseB = ifOp.getElseBodyBuilder();
+    Operation *cloned = elseB.clone(*op.getOperation());
+    if (op.getNumResults())
+      scf::YieldOp::create(elseB, op.getLoc(), cloned->getResults());
+  }
+  op.replaceAllUsesWith(ifOp.getResults());
   op.erase();
 }
 
