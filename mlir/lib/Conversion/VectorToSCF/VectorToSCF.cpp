@@ -201,7 +201,11 @@ static Value generateInBoundsCheck(
     Value base = xferOp.getIndices()[*dim];
     Value memrefIdx =
         affine::makeComposedAffineApply(b, loc, d0 + d1, {base, iv});
-    cond = arith::CmpIOp::create(lb, arith::CmpIPredicate::sgt, memrefDim,
+    // Use an *unsigned* comparison so negative indices are treated as
+    // out-of-bounds. Signed `dim > idx` is true for idx < 0, which incorrectly
+    // allows accesses below the buffer. Unsigned `dim > idx` is equivalent to
+    // `0 <= idx < dim` for non-negative dims. Regression: #223258
+    cond = arith::CmpIOp::create(lb, arith::CmpIPredicate::ugt, memrefDim,
                                  memrefIdx);
   }
 

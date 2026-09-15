@@ -128,3 +128,18 @@ func.func @negative_size1_scalable(%m: memref<4x3xf32>, %i: index, %j: index, %p
   %v = vector.transfer_read %m[%i, %j], %pad {in_bounds = [true], permutation_map = affine_map<(d0, d1) -> (d0)>} : memref<4x3xf32>, vector<[1]xf32>
   return %v : vector<[1]xf32>
 }
+
+// -----
+
+// A negative start is out of bounds even when start + vectorSize <= dim.
+// Pretty-print elides all-false in_bounds. Regression: llvm/llvm-project#223258
+// CHECK-LABEL: func.func @negative_start_not_in_bounds
+//       CHECK:   vector.transfer_read
+//   CHECK-NOT:     in_bounds = [true]
+func.func @negative_start_not_in_bounds(%a: memref<4xf32>) -> vector<3xf32> {
+  %cm1 = arith.constant -1 : index
+  %pad = arith.constant -42.0 : f32
+  %v = vector.transfer_read %a[%cm1], %pad {in_bounds = [false]}
+    : memref<4xf32>, vector<3xf32>
+  return %v : vector<3xf32>
+}
