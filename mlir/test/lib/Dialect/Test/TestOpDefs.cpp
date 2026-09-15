@@ -922,15 +922,38 @@ LogicalResult TestWithBoundsOp::verify() {
     expectedWidth = IndexType::kInternalStorageBitWidth;
   else if (auto intTy = llvm::dyn_cast<IntegerType>(type))
     expectedWidth = intTy.getWidth();
-  if (expectedWidth != 0 && getUmin().getBitWidth() != expectedWidth)
-    return emitOpError("bound attribute width (")
-           << getUmin().getBitWidth() << ") does not match result type width ("
-           << expectedWidth << ")";
+
+  auto checkBound = [&](StringRef name, const APInt &bound) -> LogicalResult {
+    if (expectedWidth != 0 && bound.getBitWidth() != expectedWidth)
+      return emitOpError("bound attribute '")
+             << name << "' width (" << bound.getBitWidth()
+             << ") does not match result type width (" << expectedWidth << ")";
+    return success();
+  };
+
+  // All four bounds must share a bitwidth so ConstantIntRanges construction
+  // does not assert. Regression: llvm/llvm-project#203855
+  if (failed(checkBound("umin", getUmin())) ||
+      failed(checkBound("umax", getUmax())) ||
+      failed(checkBound("smin", getSmin())) ||
+      failed(checkBound("smax", getSmax())))
+    return failure();
+
+  unsigned uminW = getUmin().getBitWidth();
+  if (getUmax().getBitWidth() != uminW || getSmin().getBitWidth() != uminW ||
+      getSmax().getBitWidth() != uminW)
+    return emitOpError(
+        "umin/umax/smin/smax bound attributes must all have the same bitwidth");
   return success();
 }
 
 void TestWithBoundsOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
                                          SetIntRangeFn setResultRanges) {
+  // Defensive: mismatched widths should be rejected by the verifier.
+  unsigned w = getUmin().getBitWidth();
+  if (getUmax().getBitWidth() != w || getSmin().getBitWidth() != w ||
+      getSmax().getBitWidth() != w)
+    return;
   setResultRanges(getResult(), {getUmin(), getUmax(), getSmin(), getSmax()});
 }
 
