@@ -249,3 +249,24 @@ gpu.func @non_unit_inner_stride_3D(
 // CHECK:        %[[RES:.+]] = arith.select %[[MASK]], %[[V]], %[[PASS]] : vector<8xi1>, vector<8xf32>
 // CHECK:        gpu.return %[[RES]] : vector<8xf32>
 }
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/205977
+// Integer gather indices must be cast to index before offset arithmetic.
+gpu.module @xevm_module {
+gpu.func @gather_i32_indices(%source: memref<4x2xf32>,
+     %indices: vector<4xi32>, %mask: vector<4xi1>,
+     %pass_thru: vector<4xf32>) -> vector<4xf32> {
+  %c0 = arith.constant 0 : index
+  %0 = vector.gather %source[%c0, %c0] [%indices], %mask, %pass_thru
+       : memref<4x2xf32>, vector<4xi32>, vector<4xi1>, vector<4xf32>
+       into vector<4xf32>
+  gpu.return %0 : vector<4xf32>
+}
+// CHECK-LABEL:  @gather_i32_indices(
+// CHECK-SAME:   %[[SRC:.+]]: memref<4x2xf32>,
+// CHECK-SAME:   %[[INDICES:.+]]: vector<4xi32>
+// CHECK:        %[[CAST:.+]] = arith.index_cast %[[INDICES]] : vector<4xi32> to vector<4xindex>
+// CHECK:        xegpu.load {{.*}}{{\[}}%[[CAST]]{{\]}}, {{.*}} : i64, vector<4xindex>, vector<4xi1> -> vector<4xf32>
+}

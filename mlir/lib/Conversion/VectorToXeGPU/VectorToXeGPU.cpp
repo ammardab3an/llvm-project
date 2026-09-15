@@ -349,18 +349,21 @@ static Value computeOffsets(PatternRewriter &rewriter, OpType gatScatOp,
   }
   Value indices = gatScatOp.getIndices();
   VectorType vecType = cast<VectorType>(indices.getType());
+  VectorType indexVecType = VectorType::get(
+      vecType.getShape(), rewriter.getIndexType(), vecType.getScalableDims());
+  // Gather/scatter indices may be integer vectors; offset arithmetic is in
+  // index (llvm/llvm-project#205977).
+  if (vecType.getElementType() != rewriter.getIndexType())
+    indices = arith::IndexCastOp::create(rewriter, loc, indexVecType, indices);
 
   Value strideVector =
-      vector::BroadcastOp::create(rewriter, loc, vecType, strides.back())
+      vector::BroadcastOp::create(rewriter, loc, indexVecType, strides.back())
           .getResult();
   Value stridedIndices =
       arith::MulIOp::create(rewriter, loc, strideVector, indices).getResult();
 
   Value baseVector =
-      vector::BroadcastOp::create(
-          rewriter, loc,
-          VectorType::get(vecType.getShape(), rewriter.getIndexType()),
-          baseOffset)
+      vector::BroadcastOp::create(rewriter, loc, indexVecType, baseOffset)
           .getResult();
   return arith::AddIOp::create(rewriter, loc, baseVector, stridedIndices)
       .getResult();
