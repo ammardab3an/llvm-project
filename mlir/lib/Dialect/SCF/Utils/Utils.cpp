@@ -1170,6 +1170,12 @@ LogicalResult mlir::coalescePerfectlyNestedSCFForLoops(scf::ForOp op) {
 void mlir::collapseParallelLoops(
     RewriterBase &rewriter, scf::ParallelOp loops,
     ArrayRef<std::vector<unsigned>> combinedDimensions) {
+  // Reduction results are not rewritten by this utility. Erasing a parallel
+  // op that still has uses would be fatal; refuse instead.
+  // Regression: llvm/llvm-project#216218
+  if (!loops->use_empty())
+    return;
+
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(loops);
   Location loc = loops.getLoc();

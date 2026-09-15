@@ -100,7 +100,8 @@ LogicalResult coalescePerfectlyNestedSCFForLoops(scf::ForOp op);
 
 /// Take the ParallelLoop and for each set of dimension indices, combine them
 /// into a single dimension. combinedDimensions must contain each index into
-/// loops exactly once.
+/// loops exactly once. Does nothing if `loops` still has uses (e.g. reductions
+/// producing results); those cases are not yet supported.
 void collapseParallelLoops(RewriterBase &rewriter, scf::ParallelOp loops,
                            ArrayRef<std::vector<unsigned>> combinedDimensions);
 
