@@ -51,7 +51,16 @@ struct LoopNestStateCollector {
   // Collects load and store operations, and whether or not a region holding op
   // other than ForOp and IfOp was encountered in the loop nest.
   void collect(Operation *opToWalk);
+
+  /// Returns true if a collected non-affine access (including unknown ops such
+  /// as `func.call`) may read, write, or free `memref`.
+  bool hasNonAffineAccess(Value memref) const;
 };
+
+/// Returns true if `op` may read, write, or free `memref`. Affine and memref
+/// load/store ops are matched precisely; unknown ops (e.g. `func.call`) are
+/// treated conservatively as accessing all memref operands.
+bool mayAccessMemRef(Operation *op, Value memref);
 
 // MemRefDependenceGraph is a graph data structure where graph nodes are
 // top-level operations in a `Block` and edges are memref dependences or SSA
@@ -93,6 +102,10 @@ public:
     /// Returns true if there exists an operation with a write memory effect to
     /// `memref` in this node.
     unsigned hasStore(Value memref) const;
+
+    /// Returns true if this node has a non-affine (including unknown) access to
+    /// `memref`.
+    bool hasNonAffineAccess(Value memref) const;
 
     // Returns true if the node has a free op on `memref`.
     unsigned hasFree(Value memref) const;

@@ -293,6 +293,39 @@ func.func @should_not_fuse_since_non_affine_users(%in0 : memref<32xf32>,
 
 // -----
 
+// Do not fuse a producer that passes the live buffer to an opaque call.
+// Sinking the consumer would observe the buffer before remaining calls run.
+// Regression: llvm/llvm-project#211591
+// CHECK-LABEL: func @should_not_fuse_producer_with_opaque_call
+// MAXIMAL-LABEL: func @should_not_fuse_producer_with_opaque_call
+func.func private @opaque(memref<32xf64>)
+func.func @should_not_fuse_producer_with_opaque_call(%in: memref<32xf64>,
+    %comm: memref<32xf64>, %out: memref<32xf64>) {
+  affine.for %i = 0 to 16 {
+    %a = affine.load %in[%i] : memref<32xf64>
+    %b = arith.addf %a, %a : f64
+    affine.store %b, %comm[%i] : memref<32xf64>
+    func.call @opaque(%comm) : (memref<32xf64>) -> ()
+  }
+  affine.for %j = 0 to 16 {
+    %c = affine.load %comm[%j] : memref<32xf64>
+    %d = arith.addf %c, %c : f64
+    affine.store %d, %out[%j] : memref<32xf64>
+  }
+  return
+}
+// CHECK:      affine.for
+// CHECK:        func.call @opaque
+// CHECK:      affine.for
+// CHECK-NEXT:   affine.load
+// CHECK:      return
+// MAXIMAL:      affine.for
+// MAXIMAL:        func.call @opaque
+// MAXIMAL:      affine.for
+// MAXIMAL-NEXT:   affine.load
+
+// -----
+
 // CHECK-LABEL: func @should_not_fuse_since_top_level_non_affine_users
 func.func @should_not_fuse_since_top_level_non_affine_users(%in0 : memref<32xf32>,
                       %in1 : memref<32xf32>) {

@@ -21,6 +21,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/IntegerSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/Debug.h"
@@ -76,6 +77,12 @@ void LoopNestStateCollector::collect(Operation *opToWalk) {
   });
 }
 
+bool LoopNestStateCollector::hasNonAffineAccess(Value memref) const {
+  return llvm::any_of(
+      llvm::concat<Operation *const>(memrefLoads, memrefStores, memrefFrees),
+      [&](Operation *op) { return mayAccessMemRef(op, memref); });
+}
+
 unsigned Node::getLoadOpCount(Value memref) const {
   unsigned loadOpCount = 0;
   for (Operation *loadOp : loads) {
@@ -119,6 +126,12 @@ unsigned Node::hasStore(Value memref) const {
         }
         return false;
       });
+}
+
+bool Node::hasNonAffineAccess(Value memref) const {
+  return llvm::any_of(
+      llvm::concat<Operation *const>(memrefLoads, memrefStores, memrefFrees),
+      [&](Operation *op) { return mayAccessMemRef(op, memref); });
 }
 
 unsigned Node::hasFree(Value memref) const {
@@ -186,6 +199,21 @@ static void getEffectedValues(Operation *op, SmallVectorImpl<Value> &values) {
   };
 }
 
+bool mlir::affine::mayAccessMemRef(Operation *op, Value memref) {
+  if (auto affineLoad = dyn_cast<AffineReadOpInterface>(op))
+    return affineLoad.getMemRef() == memref;
+  if (auto affineStore = dyn_cast<AffineWriteOpInterface>(op))
+    return affineStore.getMemRef() == memref;
+  if (auto memrefLoad = dyn_cast<memref::LoadOp>(op))
+    return memrefLoad.getMemRef() == memref;
+  if (auto memrefStore = dyn_cast<memref::StoreOp>(op))
+    return memrefStore.getMemRef() == memref;
+  SmallVector<Value> effectedValues;
+  getEffectedValues<MemoryEffects::Read, MemoryEffects::Write,
+                    MemoryEffects::Free>(op, effectedValues);
+  return llvm::is_contained(effectedValues, memref);
+}
+
 /// Add `op` to MDG creating a new node and adding its memory accesses (affine
 /// or non-affine to memrefAccesses (memref -> list of nodes with accesses) map.
 static Node *
@@ -243,19 +271,6 @@ addNodeToMDG(Operation *nodeOp, MemRefDependenceGraph &mdg,
   return &node;
 }
 
-/// Returns the memref being read/written by a memref/affine load/store op.
-static Value getMemRef(Operation *memOp) {
-  if (auto memrefLoad = dyn_cast<memref::LoadOp>(memOp))
-    return memrefLoad.getMemRef();
-  if (auto affineLoad = dyn_cast<AffineReadOpInterface>(memOp))
-    return affineLoad.getMemRef();
-  if (auto memrefStore = dyn_cast<memref::StoreOp>(memOp))
-    return memrefStore.getMemRef();
-  if (auto affineStore = dyn_cast<AffineWriteOpInterface>(memOp))
-    return affineStore.getMemRef();
-  llvm_unreachable("unexpected op");
-}
-
 /// Returns true if there may be a dependence on `memref` from srcNode's
 /// memory ops to dstNode's memory ops, while using the affine memory
 /// dependence analysis checks. The method assumes that there is at least one
@@ -276,12 +291,11 @@ static bool mayDependence(const Node &srcNode, const Node &dstNode,
   auto hasNonAffineDep = [&](ArrayRef<Operation *> srcMemOps,
                              ArrayRef<Operation *> dstMemOps) {
     return llvm::any_of(srcMemOps, [&](Operation *srcOp) {
-      Value srcMemref = getMemRef(srcOp);
-      if (srcMemref != memref)
+      if (!mayAccessMemRef(srcOp, memref))
         return false;
-      return llvm::find_if(dstMemOps, [&](Operation *dstOp) {
-               return srcMemref == getMemRef(dstOp);
-             }) != dstMemOps.end();
+      return llvm::any_of(dstMemOps, [&](Operation *dstOp) {
+        return mayAccessMemRef(dstOp, memref);
+      });
     });
   };
 

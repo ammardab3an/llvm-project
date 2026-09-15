@@ -21,6 +21,8 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/raw_ostream.h"
@@ -286,6 +288,40 @@ FusionResult mlir::affine::canFuseLoops(AffineForOp srcForOp,
   SmallVector<Operation *, 4> opsB;
   if (!gatherLoadsAndStores(forOpB, opsB)) {
     LDBG() << "Fusing loops with affine.if unsupported";
+    return FusionResult::FailPrecondition;
+  }
+
+  // Producer-consumer (and sibling) fusion is unsound if either nest has a
+  // non-affine access to a memref involved in fusion. Opaque ops such as
+  // `func.call` may clobber the buffer, so sinking one nest into the other
+  // would change the values observed by later iterations.
+  // Regression: llvm/llvm-project#211591
+  DenseSet<Value> fusionMemrefs;
+  switch (fusionStrategy.getStrategy()) {
+  case FusionStrategy::Sibling:
+    fusionMemrefs.insert(fusionStrategy.getSiblingFusionMemRef());
+    break;
+  case FusionStrategy::ProducerConsumer:
+    gatherProducerConsumerMemrefs(opsA, opsB, fusionMemrefs);
+    break;
+  case FusionStrategy::Generic:
+    for (Operation *op : llvm::concat<Operation *const>(opsA, opsB)) {
+      if (auto read = dyn_cast<AffineReadOpInterface>(op))
+        fusionMemrefs.insert(read.getMemRef());
+      else if (auto write = dyn_cast<AffineWriteOpInterface>(op))
+        fusionMemrefs.insert(write.getMemRef());
+    }
+    break;
+  }
+  LoopNestStateCollector srcCollector;
+  srcCollector.collect(srcForOp);
+  LoopNestStateCollector dstCollector;
+  dstCollector.collect(dstForOp);
+  if (llvm::any_of(fusionMemrefs, [&](Value memref) {
+        return srcCollector.hasNonAffineAccess(memref) ||
+               dstCollector.hasNonAffineAccess(memref);
+      })) {
+    LDBG() << "Cannot fuse loops with non-affine accesses to fusion memrefs";
     return FusionResult::FailPrecondition;
   }
 
