@@ -349,3 +349,19 @@ module attributes {transform.with_named_sequence} {
 // CHECK-LABEL: func @check_scalar_memref_operation
 //   CHECK-NOT:   scf.for
 //       CHECK:   linalg.generic
+
+// -----
+
+// Regression llvm/llvm-project#220460: empty match must still populate all
+// declared loop result handles (previously left unset → assert).
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["linalg.matmul"]} in %arg0
+        : (!transform.any_op) -> !transform.any_op
+    // CHECK: transform.test.tile_using_forall
+    %tiled_op, %loops:2 = transform.test.tile_using_forall %0 [10, 20]
+        mapping = [#gpu.block<y>, #gpu.block<x>]
+        : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}

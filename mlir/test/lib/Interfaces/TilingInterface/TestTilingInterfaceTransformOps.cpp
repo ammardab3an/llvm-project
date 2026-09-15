@@ -330,8 +330,12 @@ applyTileToAll(RewriterBase &rewriter, Operation *transformOp,
                Range &&payloadOps, ArrayRef<OpFoldResult> tileSizes,
                ArrayRef<int64_t> interchange, std::optional<ArrayAttr> mapping,
                TransformResults &transformResults) {
+  // Number of loop handles is fixed by the transform op result list. Always
+  // initialize and set them (including the empty-payload case) so callers do
+  // not query unset results. Regression: llvm/llvm-project#220460
+  unsigned numLoopResults = transformOp->getNumResults() - 1;
   SmallVector<Operation *> tiledOps;
-  SmallVector<Operation *> loopOps;
+  SmallVector<SmallVector<Operation *>> loopOps(numLoopResults);
 
   for (Operation *target : payloadOps) {
     auto tilingInterfaceOp = dyn_cast<TilingInterface>(target);
@@ -355,13 +359,15 @@ applyTileToAll(RewriterBase &rewriter, Operation *transformOp,
 
     // Report back the relevant handles to the transform op.
     tiledOps.push_back(tiledResults->tiledOps.front());
-    for (Operation *loop : tiledResults->loops)
-      loopOps.push_back(loop);
+    if (tiledResults->loops.size() != numLoopResults)
+      return transformOp->emitError("unexpected number of loops from tiling");
+    for (unsigned i = 0; i < numLoopResults; ++i)
+      loopOps[i].push_back(tiledResults->loops[i]);
   }
 
   transformResults.set(transformOp->getOpResult(0), tiledOps);
-  for (auto [index, loop] : llvm::enumerate(loopOps))
-    transformResults.set(transformOp->getOpResult(index + 1), {loop});
+  for (unsigned i = 0; i < numLoopResults; ++i)
+    transformResults.set(transformOp->getOpResult(i + 1), loopOps[i]);
 
   return success();
 }
