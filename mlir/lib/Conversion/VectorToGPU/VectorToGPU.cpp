@@ -296,8 +296,14 @@ extractStridedSliceSupportsMMAMatrixType(vector::ExtractStridedSliceOp op) {
 }
 
 static bool supportsMMaMatrixType(Operation *op, bool useNvGpu) {
-  if (isa<scf::ForOp, scf::YieldOp>(op))
+  // Only scf.for (and its yields) are rewritten by convertForOp/convertYieldOp.
+  // Yields under scf.while/scf.if must not be treated as convertible —
+  // otherwise convertYieldOp will cast the parent to ForOp and assert.
+  // Regression: llvm/llvm-project#205068
+  if (isa<scf::ForOp>(op))
     return true;
+  if (auto yieldOp = dyn_cast<scf::YieldOp>(op))
+    return isa<scf::ForOp>(yieldOp->getParentOp());
   if (auto transferRead = dyn_cast<vector::TransferReadOp>(op))
     return useNvGpu ? nvgpu::canLowerToWarpMatrixOperation(transferRead)
                     : transferReadSupportsMMAMatrixType(transferRead);
@@ -1213,7 +1219,9 @@ convertYieldOp(RewriterBase &rewriter, scf::YieldOp op,
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(op);
 
-  auto loop = cast<scf::ForOp>(op->getParentOp());
+  auto loop = dyn_cast<scf::ForOp>(op->getParentOp());
+  if (!loop)
+    return failure();
   auto yieldOperands = llvm::to_vector<4>(op.getOperands());
   for (const auto &operand : llvm::enumerate(op.getOperands())) {
     auto it = valueMapping.find(operand.value());

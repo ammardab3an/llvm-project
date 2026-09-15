@@ -727,3 +727,23 @@ func.func @read_transpose_with_broadcast_3d(%arg0: memref<2x2x2xf16>, %arg1: mem
   vector.transfer_write %B, %arg1[%c0, %c0] {in_bounds = [true, true]} : vector<2x2xf16>, memref<2x2xf16>
   return
 }
+
+// -----
+
+// Regression test for llvm/llvm-project#205068: elementwise ops inside
+// scf.while must not crash convert-vector-to-gpu (yield parent is not scf.for).
+// CHECK-LABEL: func @scf_while_elementwise_no_crash
+// CHECK: scf.while
+// CHECK: arith.addf
+func.func @scf_while_elementwise_no_crash(%arg0: vector<5xf32>, %arg1: index) -> vector<5xf32> {
+  %c1 = arith.constant 1 : index
+  %0:2 = scf.while (%arg2 = %arg1, %arg3 = %arg0) : (index, vector<5xf32>) -> (index, vector<5xf32>) {
+    %cond = arith.cmpi slt, %arg2, %c1 : index
+    scf.condition(%cond) %arg2, %arg3 : index, vector<5xf32>
+  } do {
+  ^bb0(%arg2: index, %arg3: vector<5xf32>):
+    %add = arith.addf %arg3, %arg3 : vector<5xf32>
+    scf.yield %arg2, %add : index, vector<5xf32>
+  }
+  return %0#1 : vector<5xf32>
+}
