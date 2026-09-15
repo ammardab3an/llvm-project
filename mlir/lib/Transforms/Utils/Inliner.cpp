@@ -39,8 +39,13 @@ static void walkReferencedSymbolNodes(
     Operation *op, CallGraph &cg, SymbolTableCollection &symbolTable,
     DenseMap<Attribute, CallGraphNode *> &resolvedRefs,
     function_ref<void(CallGraphNode *, Operation *)> callback) {
-  auto symbolUses = SymbolTable::getSymbolUses(op);
-  assert(symbolUses && "expected uses to be valid");
+  // getSymbolUses returns nullopt when the region is not analyzable (e.g. a
+  // function body without a terminator under --allow-unregistered-dialect).
+  // Skip rather than assert. Regression: llvm/llvm-project#197960
+  std::optional<SymbolTable::UseRange> symbolUses =
+      SymbolTable::getSymbolUses(op);
+  if (!symbolUses)
+    return;
 
   Operation *symbolTableOp = op->getParentOp();
   for (const SymbolTable::SymbolUse &use : *symbolUses) {
