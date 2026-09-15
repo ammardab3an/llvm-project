@@ -2646,16 +2646,15 @@ def CopyOp : TEST_Op<"copy", []> {
 def RegionYieldOp : TEST_Op<"region_yield",
       [Pure, ReturnLike, Terminator]> {
   let description = [{
-    This operation is used in a region and yields the corresponding type for
-    that operation.
+    This operation is used in a region and yields the corresponding values for
+    that operation. Zero or more values may be yielded; the empty form is used
+    as the implicit terminator for SingleBlockImplicitTerminator regions.
   }];
-  let arguments = (ins AnyType:$result);
+  let arguments = (ins Variadic<AnyType>:$results);
+  let builders = [OpBuilder<(ins), [{ /* nothing to do */ }]>];
   let assemblyFormat = [{
-    $result `:` type($result) attr-dict
+    ($results^ `:` type($results))? attr-dict
   }];
-  let builders = [OpBuilder<(ins),
-    [{ build($_builder, $_state, {}); }]>
-  ];
 }
 
 class BufferBasedOpBase<string mnemonic, list<Trait> traits>
