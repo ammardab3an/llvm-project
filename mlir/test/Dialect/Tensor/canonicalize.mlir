@@ -431,6 +431,20 @@ func.func @from_elements_with_poison() -> tensor<1xindex> {
 
 // -----
 
+// Poison offsets must not be folded into static offsets (getConstantIntValue
+// is empty for ub.poison). Regression for #223333.
+// CHECK-LABEL: func @extract_slice_poison_offset
+func.func @extract_slice_poison_offset(%t: tensor<8xf32>) -> tensor<4xf32> {
+  // CHECK: %[[POISON:.*]] = ub.poison : index
+  // CHECK: %[[SLICE:.*]] = tensor.extract_slice %{{.*}}[%[[POISON]]] [4] [1]
+  // CHECK: return %[[SLICE]]
+  %p = ub.poison : index
+  %s = tensor.extract_slice %t[%p] [4] [1] : tensor<8xf32> to tensor<4xf32>
+  return %s : tensor<4xf32>
+}
+
+// -----
+
 // Ensure tensor.from_elements with a vector element type doesn't crash
 // when the elements fold to constants (DenseElementsAttr does not support
 // non-scalar element types via the Attribute overload).

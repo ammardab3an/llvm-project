@@ -449,10 +449,17 @@ LogicalResult foldDynamicIndexList(SmallVectorImpl<OpFoldResult> &ofrs,
       continue;
     Attribute attr;
     if (matchPattern(cast<Value>(ofr), m_Constant(&attr))) {
-      // Note: All ofrs have index type.
-      if (onlyNonNegative && *getConstantIntValue(attr) < 0)
+      // Note: All ofrs have index type. Poison and other non-integer
+      // constants must not be folded: getConstantIntValue would be empty.
+      // Values equal to ShapedType::kDynamic must stay as SSA values: that
+      // sentinel cannot appear as a static integer in offset/size/stride
+      // attrs without a matching dynamic operand (see #223336).
+      std::optional<int64_t> intVal = getConstantIntValue(attr);
+      if (!intVal || ShapedType::isDynamic(*intVal))
         continue;
-      if (onlyNonZero && *getConstantIntValue(attr) == 0)
+      if (onlyNonNegative && *intVal < 0)
+        continue;
+      if (onlyNonZero && *intVal == 0)
         continue;
       ofr = attr;
       valuesChanged = true;
