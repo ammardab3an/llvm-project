@@ -252,3 +252,26 @@ module attributes {
 // CHECK: }) {dlti.map = #dlti.map<i32 = 42 : i64>}
 "test.op_with_dlti_map"() ({
 }) { dlti.map = #dlti.map<#dlti.dl_entry<i32, 42>> } : () -> ()
+
+// -----
+
+// Nested modules with index layout entries must combine without asserting.
+// Regression for https://github.com/llvm/llvm-project/issues/222356
+// CHECK: module attributes {
+// CHECK-SAME: dlti.dl_spec = #dlti.dl_spec<index = 32 : i64>
+module attributes {dlti.dl_spec = #dlti.dl_spec<index = 32>} {
+  // CHECK: module attributes {
+  // CHECK-SAME: dlti.dl_spec = #dlti.dl_spec<index = 32 : i64>
+  module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<index, 32>>} {
+  }
+}
+
+// -----
+
+// Nested modules with integer type layout entries must also combine.
+// CHECK: module attributes {
+// CHECK-SAME: dlti.dl_spec = #dlti.dl_spec<i32 = dense<32> : vector<1xi64>>
+module attributes {dlti.dl_spec = #dlti.dl_spec<i32 = dense<32> : vector<1xi64>>} {
+  module attributes {dlti.dl_spec = #dlti.dl_spec<i32 = dense<[32, 64]> : vector<2xi64>>} {
+  }
+}

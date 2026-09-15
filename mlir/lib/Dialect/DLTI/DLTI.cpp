@@ -333,11 +333,20 @@ static LogicalResult combineOneSpec(
     }
 
     Type typeSample = cast<Type>(kvp.second.front().getKey());
-    assert(&typeSample.getDialect() !=
-               typeSample.getContext()->getLoadedDialect<BuiltinDialect>() &&
-           "unexpected data layout entry for built-in type");
+    // Index and integer/float built-in types are valid layout keys but do not
+    // implement DataLayoutTypeInterface. Mirror verifyDataLayoutSpec: accept
+    // them and let the inner (newer) entries overwrite. Other built-in types
+    // are rejected without asserting.
+    if (isa<IndexType>(typeSample) || typeSample.isIntOrFloat()) {
+      overwriteDuplicateEntries(entriesForType[kvp.first], kvp.second);
+      continue;
+    }
+    if (isa<BuiltinDialect>(&typeSample.getDialect()))
+      return failure();
 
-    auto interface = cast<DataLayoutTypeInterface>(typeSample);
+    auto interface = dyn_cast<DataLayoutTypeInterface>(typeSample);
+    if (!interface)
+      return failure();
     // TODO: Revisit this method and call once
     // https://github.com/llvm/llvm-project/issues/130321 gets resolved.
     if (!interface.areCompatible(entriesForType.lookup(kvp.first), kvp.second,
