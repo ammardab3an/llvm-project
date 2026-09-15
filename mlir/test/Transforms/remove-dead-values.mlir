@@ -918,3 +918,27 @@ func.func @main() -> i1 {
   %status, %non_live = test.call_and_produce @callee_with_dead_return() : () -> (i1, i32)
   return %status : i1
 }
+
+// -----
+
+// Regression llvm/llvm-project#206920: erasing "dead" function arguments that
+// are still used (e.g. as scf.for bounds) must replace uses with ub.poison
+// instead of dropAllUses() leaving null operands (canonicalize would assert).
+func.func private @dead_arg_used_as_loop_bound(%arg0: index, %arg1: memref<?xf32>, %arg2: index, %arg3: index) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c10 = arith.constant 10 : index
+  scf.for %i = %c0 to %c10 step %c1 {
+    %0 = memref.load %arg1[%i] : memref<?xf32>
+    gpu.barrier
+  }
+  scf.for %i = %c0 to %arg3 step %c1 {
+    %0 = memref.load %arg1[%i] : memref<?xf32>
+    gpu.barrier
+  }
+  return
+}
+// CHECK-LABEL: func.func private @dead_arg_used_as_loop_bound
+// Bound that came from a removed argument must be poison, not null.
+// CHECK: %[[POISON:.*]] = ub.poison : index
+// CHECK: scf.for {{.*}} to %[[POISON]]

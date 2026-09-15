@@ -598,12 +598,18 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
          << OpWithFlags(b.b->getParent()->getParentOp(),
                         OpPrintingFlags().skipRegions().printGenericOpForm());
     });
-    // Note: Iterate from the end to make sure that that indices of not yet
-    // processes arguments do not change.
+    // Note: Iterate from the end so that indices of not-yet-processed
+    // arguments do not change.
     for (int i = b.nonLiveArgs.size() - 1; i >= 0; --i) {
       if (!b.nonLiveArgs[i])
         continue;
-      b.b->getArgument(i).dropAllUses();
+      Value arg = b.b->getArgument(i);
+      if (!arg.use_empty()) {
+        rewriter.setInsertionPointToStart(b.b);
+        Value poison = createPoisonedValue(rewriter, arg);
+        assert(poison && "expected poison for block argument with uses");
+        arg.replaceAllUsesWith(poison);
+      }
       b.b->eraseArgument(i);
     }
   }
@@ -649,9 +655,18 @@ static void cleanUpDeadVals(MLIRContext *ctx, RDVFinalCleanupList &list) {
       llvm::interleaveComma(f.nonLiveRets.set_bits(), os);
       os << "]";
     });
-    // Drop all uses of the dead arguments.
-    for (auto deadIdx : f.nonLiveArgs.set_bits())
-      f.funcOp.getArgument(deadIdx).dropAllUses();
+    // Replace remaining uses of dead arguments with poison before erasing.
+    // dropAllUses() would leave null operands on users (e.g. scf.for bounds)
+    // and later canonicalize/fold asserts. Regression: llvm/llvm-project#206920
+    for (auto deadIdx : f.nonLiveArgs.set_bits()) {
+      Value arg = f.funcOp.getArgument(deadIdx);
+      if (arg.use_empty())
+        continue;
+      rewriter.setInsertionPointToStart(&f.funcOp.getFunctionBody().front());
+      Value poison = createPoisonedValue(rewriter, arg);
+      assert(poison && "expected poison for argument with uses");
+      arg.replaceAllUsesWith(poison);
+    }
     // Some functions may not allow erasing arguments or results. These calls
     // return failure in such cases without modifying the function, so it's okay
     // to proceed.
