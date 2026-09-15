@@ -50,3 +50,14 @@ func.func @bitcast_scalable_negative(%input: vector<[8]xf16>) -> vector<[4]xf32>
   %0 = vector.bitcast %input : vector<[8]xf16> to vector<[4]xf32>
   return %0: vector<[4]xf32>
 }
+
+// -----
+
+// Regression for https://github.com/llvm/llvm-project/issues/206090
+// Valid bitcasts whose trailing dims do not divide must not abort the pattern.
+// CHECK-LABEL: func.func @bitcast_indivisible_last_dim
+// CHECK: vector.bitcast
+func.func @bitcast_indivisible_last_dim(%input: vector<16xi3>) -> vector<3xi16> {
+  %0 = vector.bitcast %input : vector<16xi3> to vector<3xi16>
+  return %0: vector<3xi16>
+}
