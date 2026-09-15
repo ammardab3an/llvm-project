@@ -411,7 +411,10 @@ bool LLVMPointerType::areCompatible(
           return false;
         });
     if (it == oldLayout.end()) {
-      llvm::find_if(oldLayout, [&](DataLayoutEntryInterface entry) {
+      // Fall back to the default address-space pointer layout when the
+      // enclosing layout has no entry for this address space.
+      // Regression: llvm/llvm-project#222879
+      it = llvm::find_if(oldLayout, [&](DataLayoutEntryInterface entry) {
         if (auto type = llvm::dyn_cast_if_present<Type>(entry.getKey())) {
           return llvm::cast<LLVMPointerType>(type).getAddressSpace() == 0;
         }
@@ -419,8 +422,8 @@ bool LLVMPointerType::areCompatible(
       });
     }
     if (it != oldLayout.end()) {
-      size = *extractPointerSpecValue(*it, PtrDLEntryPos::Size);
-      abi = *extractPointerSpecValue(*it, PtrDLEntryPos::Abi);
+      size = *extractPointerSpecValue(it->getValue(), PtrDLEntryPos::Size);
+      abi = *extractPointerSpecValue(it->getValue(), PtrDLEntryPos::Abi);
     }
 
     Attribute newSpec = llvm::cast<DenseIntElementsAttr>(newEntry.getValue());
