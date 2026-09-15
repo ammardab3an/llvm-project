@@ -592,26 +592,32 @@ public:
 
     // To create a value we need to compute the storage requirement.
     if (auto value = dyn_cast<ValueType>(resultType)) {
+      // Async values of types that cannot be lowered to LLVM (e.g. tensor)
+      // must not reach GEP construction with a null element type.
+      // Regression: llvm/llvm-project#216213
+      Type storedType = converter->convertType(value.getValueType());
+      if (!storedType)
+        return rewriter.notifyMatchFailure(
+            op, "cannot convert async.value payload type to LLVM");
+
       // Returns the size requirements for the async value storage.
-      auto sizeOf = [&](ValueType valueType) -> Value {
+      auto sizeOf = [&](Type storedTy) -> Value {
         auto loc = op->getLoc();
         auto i64 = rewriter.getI64Type();
 
-        auto storedType = converter->convertType(valueType.getValueType());
         auto storagePtrType =
             AsyncAPI::opaquePointerType(rewriter.getContext());
 
         // %Size = getelementptr %T* null, int 1
         // %SizeI = ptrtoint %T* %Size to i64
         auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, storagePtrType);
-        auto gep =
-            LLVM::GEPOp::create(rewriter, loc, storagePtrType, storedType,
-                                nullPtr, ArrayRef<LLVM::GEPArg>{1});
+        auto gep = LLVM::GEPOp::create(rewriter, loc, storagePtrType, storedTy,
+                                       nullPtr, ArrayRef<LLVM::GEPArg>{1});
         return LLVM::PtrToIntOp::create(rewriter, loc, i64, gep);
       };
 
       rewriter.replaceOpWithNewOp<func::CallOp>(op, kCreateValue, resultType,
-                                                sizeOf(value));
+                                                sizeOf(storedType));
 
       return success();
     }
