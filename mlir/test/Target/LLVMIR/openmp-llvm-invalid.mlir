@@ -237,3 +237,26 @@ module attributes {llvm.target_triple = "amdgcn-amd-amdhsa", omp.is_target_devic
     llvm.return
   }
 }
+
+// -----
+
+// GPU device workshare lowering does not provide a last-iteration flag.
+// linear must fail translation instead of asserting. Regression: #213905
+module attributes {llvm.target_triple = "amdgcn-amd-amdhsa",
+                   omp.is_gpu = true, omp.is_target_device = true} {
+  llvm.func @wsloop_linear_target(%x : !llvm.ptr) attributes {
+      omp.declare_target = #omp.declaretarget<device_type = any, capture_clause = to>
+  } {
+    %lb = llvm.mlir.constant(0 : i32) : i32
+    %ub = llvm.mlir.constant(9 : i32) : i32
+    %step = llvm.mlir.constant(1 : i32) : i32
+    // expected-error @below {{linear clause requires a last-iteration flag, which is not available for this workshare loop lowering}}
+    // expected-error @below {{LLVM Translation failed for operation: omp.wsloop}}
+    omp.wsloop linear(%x : !llvm.ptr = %step : i32) linear_var_types([i32]) {
+      omp.loop_nest (%iv) : i32 = (%lb) to (%ub) inclusive step (%step) {
+        omp.yield
+      }
+    }
+    llvm.return
+  }
+}
